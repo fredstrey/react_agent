@@ -1,5 +1,5 @@
 """
-Decorator para registrar funções como tools
+Decorator to register functions as tools
 """
 import inspect
 from typing import Callable, Optional, Any, get_type_hints
@@ -13,29 +13,29 @@ def tool(
     description: Optional[str] = None
 ):
     """
-    Decorator para registrar uma função como tool
+    Decorator to register a function as a tool
     
     Usage:
-        @tool(name="search", description="Busca documentos")
+        @tool(name="search", description="Search documents")
         def search_docs(query: str, limit: int = 3) -> SearchResult:
             ...
     
     Args:
-        name: Nome da tool (usa nome da função se não especificado)
-        description: Descrição da tool (usa docstring se não especificado)
+        name: Name of the tool (uses function name if not specified)
+        description: Description of the tool (uses docstring if not specified)
     """
     def decorator(func: Callable) -> Callable:
-        # Nome da tool
+        # Tool name
         tool_name = name or func.__name__
         
-        # Descrição da tool
+        # Tool description
         tool_description = description or (func.__doc__ or "").strip()
         
-        # Extrai type hints
+        # Extract type hints
         type_hints = get_type_hints(func)
         sig = inspect.signature(func)
         
-        # Cria schema Pydantic automaticamente
+        # Create Pydantic schema automatically
         fields = {}
         for param_name, param in sig.parameters.items():
             if param_name == 'self':
@@ -44,21 +44,21 @@ def tool(
             param_type = type_hints.get(param_name, Any)
             param_default = param.default if param.default != inspect.Parameter.empty else ...
             
-            # Extrai descrição do docstring se possível
+            # Extract description from docstring if possible
             param_description = f"Parameter {param_name}"
             
             fields[param_name] = (param_type, Field(default=param_default, description=param_description))
         
-        # Cria modelo Pydantic dinamicamente
+        # Create Pydantic model dynamically
         ArgsModel = create_model(
             f"{tool_name.capitalize()}Args",
             **fields
         )
         
-        # Tipo de retorno
+        # Return type
         return_type = type_hints.get('return', Any)
         
-        # Registra a tool
+        # Register the tool
         registry = ToolRegistry()
         registry.register(
             name=tool_name,
@@ -68,12 +68,12 @@ def tool(
             return_type=return_type
         )
         
-        # Wrapper que mantém a função original
+        # Wrapper to maintain the original function
         @wraps(func)
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
         
-        # Adiciona metadados
+        # Add metadata
         wrapper._tool_name = tool_name
         wrapper._tool_description = tool_description
         wrapper._args_model = ArgsModel

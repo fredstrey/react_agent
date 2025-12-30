@@ -3,61 +3,61 @@ from typing import List, Optional
 
 
 # =========================
-# SCHEMAS PARA TOOLS
+# SCHEMAS FOR TOOLS
 # =========================
 
 class SearchArgs(BaseModel):
-    """Argumentos para busca semântica em documentos"""
-    query: str = Field(..., description="Texto da consulta para buscar documentos relevantes")
-    top_k: int = Field(default=3, description="Número de documentos mais relevantes a retornar")
+    """Arguments for semantic search in documents"""
+    query: str = Field(..., description="Text of the query to search relevant documents")
+    top_k: int = Field(default=3, description="Number of most relevant documents to return")
 
 
 class DocumentChunk(BaseModel):
-    """Representa um chunk de documento retornado pela busca"""
-    content: str = Field(..., description="Conteúdo do chunk do documento")
-    score: float = Field(..., description="Score de similaridade (0-1)")
-    metadata: dict = Field(default_factory=dict, description="Metadados do documento")
+    """Document chunk returned by semantic search"""
+    content: str = Field(..., description="Content of the document chunk")
+    score: float = Field(..., description="Similarity score (0-1)")
+    metadata: dict = Field(default_factory=dict, description="Document metadata")
 
 
 class SearchResponse(BaseModel):
-    """Resposta da tool de busca semântica"""
-    query: str = Field(..., description="Query original")
-    results: List[DocumentChunk] = Field(..., description="Lista de documentos encontrados")
-    total_found: int = Field(..., description="Total de documentos encontrados")
+    """Response from semantic search tool"""
+    query: str = Field(..., description="Original query")
+    results: List[DocumentChunk] = Field(..., description="List of found documents")
+    total_found: int = Field(..., description="Total number of documents found")
 
 
 # =========================
-# SCHEMA PARA RESPOSTA FINAL
+# SCHEMA FOR FINAL RESPONSE
 # =========================
 
 class RAGResponse(BaseModel):
-    """Resposta final validada do agente RAG"""
-    answer: str = Field(..., description="Resposta à pergunta do usuário")
+    """Final response validated by RAG agent"""
+    answer: str = Field(..., description="User's question answer")
     sources_used: List[str] = Field(
         default_factory=list,
-        description="Lista de fontes/documentos usados para gerar a resposta"
+        description="List of sources/documents used to generate the response"
     )
     confidence: Optional[str] = Field(
         None,
-        description="Nível de confiança na resposta (high/medium/low)"
+        description="Confidence level in the response (high/medium/low)"
     )
 
 
 # =========================
-# SCHEMAS PARA PDF PROCESSING
+# SCHEMAS FOR PDF PROCESSING
 # =========================
 
 class ProcessPDFRequest(BaseModel):
-    """Request para processar PDF"""
-    pdf_path: str = Field(..., description="Caminho para o arquivo PDF")
-    max_tokens: int = Field(default=500, description="Máximo de tokens por chunk")
-    overlap_tokens: int = Field(default=50, description="Tokens de sobreposição entre chunks")
+    """Request to process PDF"""
+    pdf_path: str = Field(..., description="Path to the PDF file")
+    max_tokens: int = Field(default=500, description="Maximum tokens per chunk")
+    overlap_tokens: int = Field(default=50, description="Tokens overlap between chunks")
 
 
 class ProcessPDFResponse(BaseModel):
-    """Resposta do processamento de PDF"""
-    status: str = Field(..., description="Status do processamento")
-    pdf_file: str = Field(..., description="Nome do arquivo PDF")
-    total_chunks: int = Field(..., description="Total de chunks criados")
-    total_tokens: int = Field(..., description="Total de tokens processados")
-    avg_tokens_per_chunk: float = Field(..., description="Média de tokens por chunk")
+    """Response from PDF processing"""
+    status: str = Field(..., description="Status of the processing")
+    pdf_file: str = Field(..., description="Name of the PDF file")
+    total_chunks: int = Field(..., description="Total number of chunks created")
+    total_tokens: int = Field(..., description="Total number of tokens processed")
+    avg_tokens_per_chunk: float = Field(..., description="Average tokens per chunk")

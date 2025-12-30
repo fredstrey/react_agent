@@ -12,26 +12,26 @@ from embedding_manager.embedding_manager import EmbeddingManager
 
 
 class PDFProcessor:
-    """Processa PDFs usando Docling e armazena no Qdrant"""
+    """Process PDFs using Docling and store in Qdrant"""
     
     def __init__(self, embedding_manager: EmbeddingManager):
         """
-        Inicializa o processador de PDF
+        Initialize the PDF processor
         
         Args:
-            embedding_manager: Gerenciador de embeddings e Qdrant
+            embedding_manager: EmbeddingManager instance
         """
         self.embedding_manager = embedding_manager
         self._converter = None  # Lazy loading
     
     @property
     def converter(self):
-        """Lazy loading do DocumentConverter para evitar consumo de recursos desnecessário"""
+        """Lazy loading DocumentConverter to avoid unnecessary resource consumption"""
         if self._converter is None:
-            print("🔧 Inicializando Docling DocumentConverter (primeira vez)...")
+            print("🔧 Initializing Docling DocumentConverter (first time)...")
             from docling.document_converter import DocumentConverter
             self._converter = DocumentConverter()
-            print("✅ Docling inicializado!")
+            print("✅ Docling initialized!")
         return self._converter
     
     def process_pdf(
@@ -40,50 +40,50 @@ class PDFProcessor:
         max_tokens: int = 500,
     ) -> Dict:
         """
-        Processa um PDF e armazena no Qdrant
+        Process a PDF and store in Qdrant
         
         Args:
-            pdf_path: Caminho para o arquivo PDF
-            max_tokens: Máximo de tokens por chunk
-            overlap_tokens: Tokens de sobreposição (não usado no Docling)
+            pdf_path: Path to the PDF file
+            max_tokens: Maximum tokens per chunk
+            overlap_tokens: Overlap tokens (not used in Docling)
             
         Returns:
-            Dicionário com estatísticas do processamento
+            Dictionary with processing statistics
         """
-        print(f"📄 Processando PDF: {pdf_path}")
+        print(f"📄 Processing PDF: {pdf_path}")
         
-        # Verifica se arquivo existe
+        # Check if file exists
         if not os.path.exists(pdf_path):
-            raise FileNotFoundError(f"Arquivo não encontrado: {pdf_path}")
+            raise FileNotFoundError(f"File not found: {pdf_path}")
         
         pdf_file_name = Path(pdf_path).stem
         
-        # Converte PDF com Docling
-        print("🔄 Convertendo PDF com Docling...")
+        # Convert PDF with Docling
+        print("🔄 Converting PDF with Docling...")
         result = self.converter.convert(source=pdf_path)
         doc = result.document
         
-        # Cria chunker híbrido
-        print(f"✂️  Criando chunks (max {max_tokens} tokens)...")
+        # Create hybrid chunker
+        print(f"✂️  Creating chunks (max {max_tokens} tokens)...")
         chunker = HybridChunker(
             tokenizer="sentence-transformers/all-MiniLM-L6-v2",
             max_tokens=max_tokens
         )
         
-        # Gera chunks
+        # Generate chunks
         chunks_list = []
         metadatas = []
         
         for i, chunk in enumerate(chunker.chunk(dl_doc=doc)):
-            # Usa chunk.text diretamente (não contextualize que causa erro com DocItem)
+            # Use chunk.text directly (do not contextualize that causes error with DocItem)
             chunk_text = chunk.text
             chunks_list.append(chunk_text)
             
-            # Cria metadados básicos
+            # Create basic metadata
             metadata = {
                 "source": pdf_file_name,
                 "chunk_id": f"{pdf_file_name}_chunk_{i:04d}",
-                "total_chunks": -1,  # Será atualizado depois
+                "total_chunks": -1,  # Will be updated later
                 "chunk_index": i,
                 "doc_type": "pdf"
             }
@@ -91,23 +91,23 @@ class PDFProcessor:
         
         total_chunks = len(chunks_list)
         
-        # Atualiza total_chunks em todos os metadados
+        # Update total_chunks in all metadatas
         for metadata in metadatas:
             metadata["total_chunks"] = total_chunks
         
-        print(f"✅ Criados {total_chunks} chunks")
+        print(f"✅ Created {total_chunks} chunks")
         
-        # Adiciona ao Qdrant
-        print("💾 Adicionando chunks ao Qdrant...")
+        # Add to Qdrant
+        print("💾 Adding chunks to Qdrant...")
         self.embedding_manager.add_documents(chunks_list, metadatas)
         
-        # Calcula estatísticas
-        # Nota: Docling não expõe contagem de tokens diretamente,
-        # então estimamos baseado no tamanho do texto
+        # Calculate statistics
+        # Note: Docling does not expose token count directly,
+        # estimates based on text size
         total_chars = sum(len(chunk) for chunk in chunks_list)
         avg_chars = total_chars / total_chunks if total_chunks > 0 else 0
         
-        # Estimativa: ~4 chars por token (aproximação)
+        # Estimate: ~4 chars per token (approximation)
         estimated_total_tokens = total_chars // 4
         estimated_avg_tokens = avg_chars / 4
         
@@ -120,6 +120,6 @@ class PDFProcessor:
             "min_tokens_per_chunk": min(len(chunk) // 4 for chunk in chunks_list) if chunks_list else 0
         }
         
-        print(f"📊 Processamento concluído: {stats}")
+        print(f"📊 Processing completed: {stats}")
         
         return stats

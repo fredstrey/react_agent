@@ -1,5 +1,5 @@
 """
-Executor de tools com validação automática
+Tool executor with automatic Pydantic validation
 """
 import json
 from typing import Dict, Any, Optional
@@ -8,44 +8,44 @@ from .registry import ToolRegistry
 
 
 class ToolExecutor:
-    """Executor de tools com validação Pydantic"""
+    """Tool executor with automatic Pydantic validation"""
     
     def __init__(self, registry: Optional[ToolRegistry] = None):
         """
-        Inicializa executor
+        Initialize executor
         
         Args:
-            registry: Registry de tools (usa singleton se não especificado)
+            registry: Tool registry (uses singleton if not specified)
         """
         self.registry = registry or ToolRegistry()
     
     def execute(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Executa uma tool com validação automática
+        Execute a tool with automatic validation
         
         Args:
-            tool_name: Nome da tool
-            arguments: Argumentos para a tool
+            tool_name: Name of the tool
+            arguments: Arguments for the tool
             
         Returns:
-            Resultado da execução
+            Execution result
         """
-        # Busca tool
+        # Search for tool
         tool_data = self.registry.get(tool_name)
         if not tool_data:
-            raise ValueError(f"Tool '{tool_name}' não encontrada")
+            raise ValueError(f"Tool '{tool_name}' not found")
         
         function = tool_data["function"]
         args_model = tool_data["args_model"]
         
         try:
-            # Valida argumentos com Pydantic
+            # Validate arguments with Pydantic
             validated_args = args_model(**arguments)
             
-            # Executa função
+            # Execute function
             result = function(**validated_args.model_dump())
             
-            # Retorna resultado
+            # Return result
             return {
                 "success": True,
                 "result": result,
@@ -53,30 +53,30 @@ class ToolExecutor:
             }
             
         except ValidationError as e:
-            # Erro de validação
+            # Validation error
             return {
                 "success": False,
-                "error": f"Erro de validação: {str(e)}",
+                "error": f"Validation error: {str(e)}",
                 "tool_name": tool_name
             }
         
         except Exception as e:
-            # Erro na execução
+            # Execution error
             return {
                 "success": False,
-                "error": f"Erro na execução: {str(e)}",
+                "error": f"Execution error: {str(e)}",
                 "tool_name": tool_name
             }
     
     def execute_from_llm_response(self, llm_response: str) -> Optional[Dict[str, Any]]:
         """
-        Extrai e executa tool call da resposta do LLM
+        Extract and execute tool call from LLM response
         
         Args:
-            llm_response: Resposta do LLM contendo tool call
+            llm_response: LLM response containing tool call
             
         Returns:
-            Resultado da execução ou None se não houver tool call
+            Execution result or None if no tool call
         """
         tool_call = self._extract_tool_call(llm_response)
         if not tool_call:
@@ -86,20 +86,20 @@ class ToolExecutor:
     
     def _extract_tool_call(self, text: str) -> Optional[Dict[str, Any]]:
         """
-        Extrai tool call do texto
+        Extract tool call from text
         
-        Formato esperado: tool_name({"arg1": "value1", ...})
+        Expected format: tool_name({"arg1": "value1", ...})
         """
         for tool_name in self.registry.list():
             if tool_name in text:
                 try:
-                    # Encontra início do JSON
+                    # Find JSON start
                     start = text.find(tool_name) + len(tool_name)
                     json_start = text.find("{", start)
                     if json_start == -1:
                         continue
                     
-                    # Encontra fim do JSON
+                    # Find JSON end
                     brace_count = 0
                     json_end = json_start
                     for i in range(json_start, len(text)):

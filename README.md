@@ -1,16 +1,16 @@
-# Fred.AI - RAG Agent com ReAct
+# Fred.AI - RAG Agent with ReAct
 
-Sistema de RAG (Retrieval-Augmented Generation) especializado em finanças e economia, com agente ReAct para raciocínio e ação iterativa.
+RAG (Retrieval-Augmented Generation) system specialized in finance and economics, featuring a ReAct agent for iterative reasoning and action.
 
-## 🎯 Características
+## 🎯 Features
 
-- **RAG Agent V2**: Busca semântica em documentos financeiros
-- **ReAct Agent**: Loop de raciocínio e ação com até 3 iterações
-- **Ferramentas Financeiras**: Preços de ações, comparação, busca em documentos
-- **Validação Inteligente**: Verifica se respostas são relevantes ao domínio
-- **Síntese de Respostas**: Combina múltiplas iterações sem redundância
+- **RAG Agent V2**: Semantic search in financial documents
+- **ReAct Agent**: Reasoning and action loop with up to 3 iterations
+- **Financial Tools**: Stock prices, comparison, document search
+- **Intelligent Validation**: Verifies if responses are relevant to the domain
+- **Response Synthesis**: Combines multiple iterations without redundancy
 
-## 🏗️ Arquitetura
+## 🏗️ Architecture
 
 ```
 ┌─────────────────┐
@@ -19,7 +19,7 @@ Sistema de RAG (Retrieval-Augmented Generation) especializado em finanças e eco
          │
          ▼
 ┌─────────────────┐
-│  Context Agent  │ ← Extrai intenção
+│  Context Agent  │ ← Extracts intent
 └────────┬────────┘
          │
          ▼
@@ -35,12 +35,12 @@ Sistema de RAG (Retrieval-Augmented Generation) especializado em finanças e eco
          │
          ▼
 ┌─────────────────┐
-│ Response Synth  │ ← Combina respostas
+│ Response Synth  │ ← Combines responses
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
-│Validation Agent │ ← Valida domínio
+│Validation Agent │ ← Validates domain
 └────────┬────────┘
          │
          ▼
@@ -49,135 +49,135 @@ Sistema de RAG (Retrieval-Augmented Generation) especializado em finanças e eco
 └─────────────────┘
 ```
 
-## 🚀 Instalação
+## 🚀 Installation
 
-### 1. Clone o repositório
+### 1. Clone the repository
 ```bash
-git clone <repo-url>
+git clone https://github.com/fredstrey/react_agent.git
 cd Fred.AI
 ```
 
-### 2. Crie ambiente virtual
+### 2. Create virtual environment
 ```bash
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
-# ou
+# or
 venv\Scripts\activate  # Windows
 ```
 
-### 3. Instale dependências
+### 3. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Configure variáveis de ambiente
-Crie arquivo `.env`:
+### 4. Configure environment variables
+Create `.env` file:
 ```env
 OPENROUTER_API_KEY=your_key_here
 ```
 
-### 5. Inicie Qdrant (Docker)
+### 5. Start Qdrant (Docker)
 ```bash
 docker run -p 6333:6333 qdrant/qdrant
 ```
 
-## 📦 Estrutura do Projeto
+## 📦 Project Structure
 
 ```
 Fred.AI/
 ├── agents/
-│   ├── context_agent.py      # Extração de intenção
-│   ├── rag_agent_v2.py        # RAG Agent principal
+│   ├── context_agent.py      # Intent extraction
+│   ├── rag_agent_v2.py        # Main RAG Agent
 │   ├── react_agent.py         # ReAct: Reasoning + Acting
-│   └── validation_agent.py    # Validação de domínio
+│   └── validation_agent.py    # Domain validation
 ├── api/
 │   └── api.py                 # FastAPI endpoints
 ├── core/
-│   ├── tool_calling_agent.py  # Base para tool calling
-│   ├── execution_context.py   # Contexto de execução
-│   ├── registry.py            # Registro de ferramentas
-│   └── executor.py            # Executor de ferramentas
+│   ├── tool_calling_agent.py  # Base for tool calling
+│   ├── execution_context.py   # Execution context
+│   ├── registry.py            # Tool registry
+│   └── executor.py            # Tool executor
 ├── embedding_manager/
-│   └── embedding_manager.py   # Gerenciador de embeddings
+│   └── embedding_manager.py   # Embeddings manager
 ├── providers/
-│   ├── openrouter.py          # Provider OpenRouter
+│   ├── openrouter.py          # OpenRouter provider
 │   └── openrouter_function_caller.py
 ├── tools/
-│   └── rag_tools.py           # Ferramentas RAG
+│   └── rag_tools.py           # RAG tools
 └── examples/
-    ├── add_finance_docs.py    # Adicionar documentos
-    └── test_react_agent.py    # Testes do ReAct
+    ├── add_finance_docs.py    # Add documents
+    └── test_react_agent.py    # ReAct tests
 ```
 
-## 🛠️ Ferramentas Disponíveis
+## 🛠️ Available Tools
 
 ### 1. `search_documents`
-Busca semântica em documentos financeiros
+Semantic search in financial documents
 ```python
-search_documents(query="O que é taxa Selic?")
+search_documents(query="What is the Selic rate?")
 ```
 
 ### 2. `get_stock_price`
-Obtém preço de UMA ação
+Get price of ONE stock
 ```python
 get_stock_price(ticker="AAPL")
 ```
 
 ### 3. `compare_stocks`
-Compara MÚLTIPLAS ações
+Compare MULTIPLE stocks
 ```python
 compare_stocks(tickers=["AAPL", "MSFT", "GOOGL"])
 ```
 
 ### 4. `redirect`
-Indica que pergunta está fora do escopo
+Indicates that question is out of scope
 
-## 🎮 Uso
+## 🎮 Usage
 
-### Iniciar API
+### Start API
 ```bash
 python api/api.py
 ```
 
-### Fazer requisição
+### Make request
 ```bash
 curl -X POST http://localhost:8000/stream \
   -H "Content-Type: application/json" \
-  -d '{"message": "Qual o preço da AAPL e quem define a taxa Selic?"}'
+  -d '{"message": "What is the price of AAPL and who defines the Selic rate?"}'
 ```
 
-### Adicionar documentos
+### Add documents
 ```bash
 python examples/add_finance_docs.py
 ```
 
 ## 🧠 ReAct Agent
 
-O ReAct Agent implementa um loop de raciocínio e ação:
+The ReAct Agent implements a reasoning and action loop:
 
-### Decisões Possíveis
-- **CONTINUE**: Informação suficiente
-- **RETRY_WITH_REFINEMENT**: Refinar query e tentar novamente
-- **CALL_DIFFERENT_TOOL**: Chamar ferramenta diferente
-- **INSUFFICIENT_DATA**: Dados insuficientes após 3 iterações
+### Possible Decisions
+- **CONTINUE**: Sufficient information
+- **RETRY_WITH_REFINEMENT**: Refine query and try again
+- **CALL_DIFFERENT_TOOL**: Call different tool
+- **INSUFFICIENT_DATA**: Insufficient data after 3 iterations
 
-### Exemplo de Execução
+### Execution Example
 ```
-Query: "Preço da AAPL e quem define Selic?"
+Query: "Price of AAPL and who defines Selic?"
 
-Iteração 1: get_stock_price("AAPL") → $273.76
-ReAct: Falta responder sobre Selic → CALL_DIFFERENT_TOOL
+Iteration 1: get_stock_price("AAPL") → $273.76
+ReAct: Missing answer about Selic → CALL_DIFFERENT_TOOL
 
-Iteração 2: search_documents("Quem define Selic?") → COPOM
-ReAct: Ambas partes respondidas → CONTINUE
+Iteration 2: search_documents("Who defines Selic?") → COPOM
+ReAct: Both parts answered → CONTINUE
 
-Resposta: "AAPL: $273.76. COPOM define a taxa Selic."
+Response: "AAPL: $273.76. COPOM defines the Selic rate."
 ```
 
-## ⚙️ Configuração
+## ⚙️ Configuration
 
-### Modelos LLM
-Configurados em `agents/rag_agent_v2.py`:
+### LLM Models
+Configured in `agents/rag_agent_v2.py`:
 ```python
 RAGAgentV2(
     tool_caller_model="xiaomi/mimo-v2-flash:free",
@@ -196,37 +196,29 @@ EmbeddingManager(
 )
 ```
 
-## 📊 Recursos Implementados
+## 📊 Implemented Features
 
-✅ Loop ReAct com 3 iterações  
-✅ Execução sequencial de ferramentas (semáforo)  
-✅ Detecção de queries múltiplas  
-✅ Refinamento automático de queries  
-✅ Acumulação de contexto entre iterações  
-✅ Síntese inteligente de respostas  
-✅ Validação de domínio (finanças/economia)  
+✅ ReAct loop with 3 iterations  
+✅ Sequential tool execution (semaphore)  
+✅ Multi-part query detection  
+✅ Automatic query refinement  
+✅ Context accumulation between iterations  
+✅ Intelligent response synthesis  
+✅ Domain validation (finance/economics)  
 
 ## 🐛 Troubleshooting
 
-### Qdrant não conecta
+### Qdrant won't connect
 ```bash
-# Verificar se container está rodando
+# Check if container is running
 docker ps
 
-# Iniciar Qdrant
+# Start Qdrant
 docker run -p 6333:6333 qdrant/qdrant
 ```
 
-### API Key inválida
-Verifique arquivo `.env` e configure `OPENROUTER_API_KEY`
+### Invalid API Key
+Check `.env` file and configure `OPENROUTER_API_KEY`
 
-### Respostas vazias
-Execute `python examples/add_finance_docs.py` para adicionar documentos
-
-## 📝 Licença
-
-MIT License
-
-## 👥 Contribuindo
-
-Pull requests são bem-vindos! Para mudanças maiores, abra uma issue primeiro.
+### Empty responses
+Run `python examples/add_finance_docs.py` to add documents

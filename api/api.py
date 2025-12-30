@@ -1,5 +1,5 @@
 """
-API FastAPI com RAG Agent usando FunctionGemma
+API FastAPI with ReAct Agent
 """
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,14 +22,14 @@ from embedding_manager.embedding_manager import EmbeddingManager
 from agents.rag_agent_v2 import RAGAgentV2
 from pdf_pipeline.pdf_processor import PDFProcessor
 
-# Inicializa FastAPI
+# Initialize FastAPI
 app = FastAPI(
-    title="RAG Agent API",
-    description="API de chat com RAG Agent usando FunctionGemma",
+    title="ReAct Agent API",
+    description="API de chat com ReAct Agent usando FunctionGemma",
     version="2.0.0"
 )
 
-# Configurar CORS
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,8 +38,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Inicializa componentes globais
-print("🚀 Inicializando componentes...")
+# Initialize global components
+print("🚀 Initializing components...")
 
 # Embedding manager
 embedding_manager = EmbeddingManager(
@@ -48,21 +48,21 @@ embedding_manager = EmbeddingManager(
     collection_name="rag_api"
 )
 
-# Inicializa coleção se necessário
+# Initialize collection if necessary
 try:
     embedding_manager.initialize_collection(recreate=False)
-    print("✅ Coleção Qdrant inicializada")
+    print("✅ Qdrant collection initialized")
 except Exception as e:
-    print(f"⚠️  Aviso ao inicializar coleção: {e}")
+    print(f"⚠️  Warning initializing collection: {e}")
 
 # PDF Processor
 pdf_processor = PDFProcessor(embedding_manager)
-print("\n✅ PDF Processor inicializado!")
+print("\n✅ PDF Processor initialized!")
 
 
 @app.get("/")
 async def root():
-    """Endpoint raiz"""
+    """Root endpoint"""
     return {
         "message": "RAG Agent API",
         "version": "2.0.0",
@@ -72,11 +72,11 @@ async def root():
             "response_generator": "gemma3:1b"
         },
         "endpoints": {
-            "/stream": "POST - Chat com streaming",
-            "/chat": "POST - Chat sem streaming",
+            "/stream": "POST - Chat with streaming",
+            "/chat": "POST - Chat without streaming",
             "/health": "GET - Health check",
-            "/documents": "POST - Adicionar documentos",
-            "/process_pdf": "POST - Processar PDF"
+            "/documents": "POST - Add documents",
+            "/process_pdf": "POST - Process PDF"
         }
     }
 
@@ -85,11 +85,11 @@ async def root():
 async def health():
     """Health check"""
     try:
-        # Verifica providers
+        # Check providers
         tool_caller_ok = rag_agent.tool_caller.is_available()
         response_gen_ok = rag_agent.response_generator.is_available()
         
-        # Verifica coleção
+        # Check collection
         collection_info = embedding_manager.get_collection_info()
         
         return {
@@ -113,24 +113,24 @@ async def health():
 @app.post("/stream")
 async def stream_chat(request: ChatRequest):
     """
-    Endpoint de chat com streaming via Server-Sent Events
+    Endpoint chat with streaming via Server-Sent Events
     
     Args:
-        request: ChatRequest com mensagem do usuário
+        request: ChatRequest with user message
         
     Returns:
-        EventSourceResponse com chunks de streaming
+        EventSourceResponse with streaming chunks
     """
     conversation_id = request.conversation_id or str(uuid.uuid4())
     
     async def generate_stream() -> AsyncGenerator[str, None]:
-        """Gera chunks de streaming"""
+        """Generate streaming chunks"""
         try:
-            # Processa histórico de chat (limita às últimas 3 interações = 6 mensagens)
+            # Process chat history (limits to last 3 interactions = 6 messages)
             chat_history = []
             if request.chat_history:
-                print(f"📜 [DEBUG] Chat history recebido: {len(request.chat_history)} mensagens")
-                # Converte ChatMessage para dict
+                print(f"📜 [DEBUG] Chat history received: {len(request.chat_history)} messages")
+                # Convert ChatMessage to dict
                 history_dicts = [msg.model_dump() for msg in request.chat_history]
                 # Limita às últimas 6 mensagens (3 interações user+assistant)
                 chat_history = history_dicts[-6:]
@@ -138,7 +138,7 @@ async def stream_chat(request: ChatRequest):
             else:
                 print("📜 [DEBUG] Nenhum chat history recebido")
             
-            # Cria nova instância do RAG Agent V2 com histórico
+            # Create new instance of RAG Agent V2 with history
             rag_agent = RAGAgentV2(
                 embedding_manager=embedding_manager,
                 tool_caller_model="xiaomi/mimo-v2-flash:free",
@@ -147,19 +147,19 @@ async def stream_chat(request: ChatRequest):
             )
             
             
-            # Executa RAG Agent V2 com histórico
+            # Execute RAG Agent V2 with history
             response, contexto = rag_agent.run(
                 query=request.message,
                 chat_history=chat_history
             )
             
-            # Chunk de resposta
+            # Response chunk
             yield json.dumps({
                 "type": "system",
                 "content": response.answer
             })
             
-            # Chunk final
+            # Final chunk
             yield json.dumps({
                 "type": "metadata",
                 "content": "",
@@ -172,7 +172,7 @@ async def stream_chat(request: ChatRequest):
             })
             
         except Exception as e:
-            # Chunk de erro
+            # Error chunk
             yield json.dumps({
                 "type": "error",
                 "content": str(e),
@@ -184,14 +184,14 @@ async def stream_chat(request: ChatRequest):
 @app.post("/documents")
 async def add_documents(documents: list[str], metadatas: list[dict] = None):
     """
-    Adiciona documentos à base de conhecimento
+    Add documents to knowledge base
     
     Args:
-        documents: Lista de textos dos documentos
-        metadatas: Lista opcional de metadados
+        documents: List of document texts
+        metadatas: Optional list of metadata
         
     Returns:
-        Status da operação
+        Status of the operation
     """
     try:
         embedding_manager.add_documents(documents, metadatas)
@@ -211,18 +211,18 @@ async def add_documents(documents: list[str], metadatas: list[dict] = None):
 @app.post("/process_pdf", response_model=ProcessPDFResponse)
 async def process_pdf(request: ProcessPDFRequest):
     """
-    Processa um PDF e adiciona à base de conhecimento
+    Process a PDF and add to knowledge base
     
     Args:
-        request: ProcessPDFRequest com caminho do PDF e parâmetros
+        request: ProcessPDFRequest with PDF path and parameters
         
     Returns:
-        ProcessPDFResponse com estatísticas do processamento
+        ProcessPDFResponse with processing statistics
     """
     try:
-        # Verifica se arquivo existe
+        # Check if file exists
         if not os.path.exists(request.pdf_path):
-            raise HTTPException(status_code=404, detail=f"Arquivo não encontrado: {request.pdf_path}")
+            raise HTTPException(status_code=404, detail=f"File not found: {request.pdf_path}")
         
         # Processa PDF
         stats = pdf_processor.process_pdf(
@@ -246,7 +246,7 @@ if __name__ == "__main__":
     import uvicorn
     
     print("\n" + "=" * 70)
-    print("🚀 Iniciando servidor RAG Agent API...")
+    print("🚀 Starting RAG Agent API...")
     print("=" * 70)
     print("\n📍 Endpoints disponíveis:")
     print("   • http://localhost:8000/")
@@ -255,7 +255,7 @@ if __name__ == "__main__":
     print("   • http://localhost:8000/documents (POST)")
     print("   • http://localhost:8000/process_pdf (POST)")
     print("   • http://localhost:8000/health")
-    print("\n🤖 Modelos:")
+    print("\n🤖 Models:")
     print("   • Tool Caller: xiaomi/mimo-v2-flash:free (OpenRouter)")
     print("   • Embeddings: qwen3-embedding:0.6b")
     print("   • Response: xiaomi/mimo-v2-flash:free (OpenRouter)")

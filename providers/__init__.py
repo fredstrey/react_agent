@@ -1,8 +1,10 @@
 """
-LLM Providers
+Providers for LLM interactions
 """
-from .ollama import OllamaProvider
-from .function_caller import FunctionCallerProvider
 from .openrouter import OpenRouterProvider
+from .openrouter_function_caller import OpenRouterFunctionCaller
 
-__all__ = ['OllamaProvider', 'FunctionCallerProvider', 'OpenRouterProvider']
+__all__ = [
+    'OpenRouterProvider',
+    'OpenRouterFunctionCaller'
+]

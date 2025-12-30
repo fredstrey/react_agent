@@ -3,44 +3,44 @@ from typing import List, Optional
 
 
 class ChatMessage(BaseModel):
-    """Mensagem de chat"""
-    role: str = Field(..., description="Papel: user ou assistant")
-    content: str = Field(..., description="Conteúdo da mensagem")
+    """Chat message"""
+    role: str = Field(..., description="Role: user or assistant")
+    content: str = Field(..., description="Message content")
 
 
 class ChatRequest(BaseModel):
-    """Request para endpoint de chat"""
-    message: str = Field(..., description="Mensagem do usuário")
-    conversation_id: Optional[str] = Field(None, description="ID da conversação")
-    stream: bool = Field(default=True, description="Se deve usar streaming")
-    chat_history: Optional[List[ChatMessage]] = Field(default=None, description="Histórico de chat (últimas 3 interações)")
+    """Request for chat endpoint"""
+    message: str = Field(..., description="User message")
+    conversation_id: Optional[str] = Field(None, description="Conversation ID")
+    stream: bool = Field(default=True, description="If streaming should be used")
+    chat_history: Optional[List[ChatMessage]] = Field(default=None, description="Chat history (last 3 interactions)")
 
 
 class ChatStreamChunk(BaseModel):
-    """Chunk de streaming"""
-    type: str = Field(..., description="Tipo: thinking, tool_call, response, done")
-    content: str = Field(default="", description="Conteúdo do chunk")
-    metadata: Optional[dict] = Field(None, description="Metadados adicionais")
+    """Chunk of streaming"""
+    type: str = Field(..., description="Type: thinking, tool_call, response, done")
+    content: str = Field(default="", description="Chunk content")
+    metadata: Optional[dict] = Field(None, description="Additional metadata")
 
 
 class ChatResponse(BaseModel):
-    """Resposta completa do chat"""
-    answer: str = Field(..., description="Resposta final")
-    sources_used: List[str] = Field(default_factory=list, description="Fontes usadas")
-    confidence: Optional[str] = Field(None, description="Nível de confiança")
-    conversation_id: str = Field(..., description="ID da conversação")
+    """Complete chat response"""
+    answer: str = Field(..., description="Final answer")
+    sources_used: List[str] = Field(default_factory=list, description="Sources used")
+    confidence: Optional[str] = Field(None, description="Confidence level")
+    conversation_id: str = Field(..., description="Conversation ID")
 
 
 class ProcessPDFRequest(BaseModel):
-    """Request para processar PDF"""
-    pdf_path: str = Field(..., description="Caminho para o arquivo PDF")
-    max_tokens: int = Field(default=500, description="Máximo de tokens por chunk")
+    """Request to process PDF"""
+    pdf_path: str = Field(..., description="Path to the PDF file")
+    max_tokens: int = Field(default=500, description="Maximum tokens per chunk")
 
 
 class ProcessPDFResponse(BaseModel):
-    """Resposta do processamento de PDF"""
-    status: str = Field(..., description="Status do processamento")
-    pdf_file: str = Field(..., description="Nome do arquivo PDF")
-    total_chunks: int = Field(..., description="Total de chunks criados")
-    total_tokens: int = Field(..., description="Total de tokens processados")
-    avg_tokens_per_chunk: float = Field(..., description="Média de tokens por chunk")
+    """Response from PDF processing"""
+    status: str = Field(..., description="Processing status")
+    pdf_file: str = Field(..., description="PDF file name")
+    total_chunks: int = Field(..., description="Total of chunks created")
+    total_tokens: int = Field(..., description="Total of tokens processed")
+    avg_tokens_per_chunk: float = Field(..., description="Average tokens per chunk")

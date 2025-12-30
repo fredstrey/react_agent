@@ -5,5 +5,5 @@ from pydantic import BaseModel, Field
 
 
 class AgentResponse(BaseModel):
-    """Resposta padronizada de um agent"""
-    answer: str = Field(..., description="Resposta final do agent")
+    """Standardized agent response"""
+    answer: str = Field(..., description="Final agent response")
