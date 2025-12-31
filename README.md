@@ -4,7 +4,7 @@ Finance.AI is a sophisticated financial assistant powered by a **Hierarchical Fi
 
 ## 📺 Demo
 
-![Finance.AI Demo](./financeai.mp4)
+[![Finance.AI Demo](https://img.youtube.com/vi/gRtdQdl3ApI/0.jpg)](https://youtu.be/gRtdQdl3ApI)
 
 ### Screenshots
 
