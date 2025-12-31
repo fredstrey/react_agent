@@ -29,8 +29,9 @@ stateDiagram-v2
     }
     
     state "Execution Layer" as Execution {
-        ToolState --> ValidationState
-        ValidationState --> RouterState : Valid
+        ToolState --> AnswerState : Done (skip validation)
+        ToolState --> ValidationState : With Validation
+        ValidationState --> AnswerState : Valid
         ValidationState --> RetryState : Invalid
     }
     
