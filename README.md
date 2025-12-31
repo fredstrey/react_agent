@@ -22,24 +22,19 @@ The core of Finance.AI is a **hierarchical state machine** that provides determi
 stateDiagram-v2
     [*] --> Start
     Start --> RouterState
-    
-    state "Reasoning Layer" as Reasoning {
-        RouterState --> ToolState : Needs Data
-        RouterState --> AnswerState : Has Answer
-    }
-    
-    state "Execution Layer" as Execution {
-        ToolState --> ValidationState
-        ToolState --> AnswerState : Skip Validation
-        ValidationState --> AnswerState : Valid
-        ValidationState --> RetryState : Invalid
-    }
-    
-    state "Recovery Layer" as Recovery {
-        RetryState --> RouterState : Retry
-        RetryState --> FailState : Max Retries
-    }
-    
+
+    RouterState --> ToolState : Needs Data
+    RouterState --> AnswerState : Has Answer
+
+    ToolState --> ValidationState : With Validation
+    ToolState --> AnswerState : Skip Validation
+
+    ValidationState --> AnswerState : Valid
+    ValidationState --> RetryState : Invalid
+
+    RetryState --> RouterState : Retry
+    RetryState --> FailState : Max Retries
+
     AnswerState --> [*]
     FailState --> [*]
 ```
