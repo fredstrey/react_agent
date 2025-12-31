@@ -141,19 +141,26 @@ AgentRootState (Top-level coordinator)
 stateDiagram-v2
     [*] --> Start
     Start --> RouterState
-    
-    RouterState --> ToolState : needs_data
-    RouterState --> AnswerState : has_answer
-    
-    ToolState --> ValidationState : executed
-    
-    ValidationState --> AnswerState : valid
-    ValidationState --> RetryState : invalid
-    
-    RetryState --> RouterState : retry
-    RetryState --> FailState : max_retries
-    
+
+    state "Reasoning Layer" as Reasoning {
+        RouterState --> ToolState : Needs Data
+        RouterState --> AnswerState : Has Answer
+    }
+
+    state "Execution Layer" as Execution {
+        ToolState --> ValidationState : With Validation (Optional)
+        ToolState --> AnswerState : Skip Validation (Default)
+        ValidationState --> AnswerState : Valid
+        ValidationState --> RetryState : Invalid
+    }
+
+    state "Recovery Layer" as Recovery {
+        RetryState --> RouterState : Retry
+        RetryState --> AnswerState : Max Retries (Best Effort)
+    }
+
     AnswerState --> [*]
+    AnswerState --> FailState : Error
     FailState --> [*]
 ```
 
@@ -290,7 +297,7 @@ def handle(self, context: ExecutionContext):
 **Purpose**: Execute all pending tool calls in parallel.
 
 **Input**: `pending_tool_calls` from memory  
-**Output**: `ValidationState` (always)
+**Output**: `ValidationState` (if validation enabled) or `AnswerState` (if skipped)
 
 **Implementation**:
 ```python
@@ -320,7 +327,7 @@ def handle(self, context: ExecutionContext):
 
 ### 3.3 ValidationState (Quality Gate)
 
-**Purpose**: Verify tool results are valid before proceeding.
+**Purpose**: Verify tool results are valid before proceeding (Optional).
 
 **Input**: Latest tool results  
 **Output**: `AnswerState` (if valid) or `RetryState` (if invalid)
@@ -358,7 +365,7 @@ def handle(self, context: ExecutionContext):
 **Purpose**: Attempt to recover from failed tool calls.
 
 **Input**: Retry count from memory  
-**Output**: `RouterState` (retry) or `FailState` (give up)
+**Output**: `RouterState` (retry) or `AnswerState` (Max Retries - Best Effort)
 
 **Implementation**:
 ```python
@@ -370,7 +377,7 @@ def handle(self, context: ExecutionContext):
         context.set_memory("retry_count", retry_count + 1)
         return RouterState(...)  # Try again
     else:
-        return FailState(...)    # Give up
+        return AnswerState(...)  # Best Effort
 ```
 
 **Configurable**: `max_retries` can be set per-request via context memory.

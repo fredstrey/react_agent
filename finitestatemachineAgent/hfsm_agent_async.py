@@ -194,9 +194,10 @@ class ToolState(AsyncHierarchicalState):
     """
     Async tool execution state.
     """
-    def __init__(self, parent, executor: AsyncToolExecutor):
+    def __init__(self, parent, executor: AsyncToolExecutor, skip_validation: bool = True):
         super().__init__(parent)
         self.executor = executor
+        self.skip_validation = skip_validation
 
     async def handle(self, context: AsyncExecutionContext):
         logger.info("🛠️ [Tool] Executing tools...")
@@ -217,8 +218,13 @@ class ToolState(AsyncHierarchicalState):
                 call["result"] = result
                 logger.info(f"✅ [Tool] Result for {call['tool_name']}: {str(result)[:100]}...")
 
-        # Go directly to answer (skip validation for now)
-        return self.find_state_by_type("AnswerState")
+        # Check validation config
+        if self.skip_validation:
+            logger.info("⏩ [Tool] Skipping validation (configured)")
+            return self.find_state_by_type("AnswerState")
+        else:
+            logger.info("🔍 [Tool] Proceeding to validation")
+            return self.find_state_by_type("ValidationState")
 
 
 class ValidationState(AsyncHierarchicalState):
@@ -300,7 +306,7 @@ class AnswerState(TerminalState):
 
             messages.append({
                 "role": "system",
-                "content": "Based on the tool results, provide a clear answer. Do NOT call more tools."
+                "content": "Based on the tool results, provide a best-effort answer. If the information is insufficient or invalid, explain clearly what is missing. Do NOT call more tools."
             })
 
         # Create async streaming generator
@@ -322,8 +328,8 @@ class RetryState(AsyncHierarchicalState):
         context.current_iteration += 1
 
         if context.current_iteration >= context.max_iterations:
-            logger.error("❌ [Retry] Max retries reached")
-            return self.find_state_by_type("FailState")
+            logger.warning("⚠️ [Retry] Max retries reached. Proceeding to AnswerState (Best Effort).")
+            return self.find_state_by_type("AnswerState")
         else:
             logger.warning(f"⚠️ [Retry] Attempt {context.current_iteration}/{context.max_iterations}")
             return self.find_state_by_type("RouterState")
@@ -356,13 +362,15 @@ class AsyncAgentEngine:
         registry,
         executor: AsyncToolExecutor,
         system_instruction: str = "",
-        tool_choice: Optional[str] = None
+        tool_choice: Optional[str] = None,
+        skip_validation: bool = True  # Default: No validation
     ):
         self.llm = llm
         self.registry = registry
         self.executor = executor
         self.system_instruction = system_instruction
-        self.tool_choice = tool_choice  # "auto", "required", "none", or None
+        self.tool_choice = tool_choice
+        self.skip_validation = skip_validation
 
         self.states = {}
 
@@ -389,7 +397,7 @@ class AsyncAgentEngine:
         self.router_state = RouterState(self.reasoning, self.llm, self.registry, self.tool_choice)
         self.states["RouterState"] = self.router_state
 
-        self.tool_state = ToolState(self.execution, self.executor)
+        self.tool_state = ToolState(self.execution, self.executor, self.skip_validation)
         self.states["ToolState"] = self.tool_state
 
         self.validation_state = ValidationState(self.execution, self.llm)

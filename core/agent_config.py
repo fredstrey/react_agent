@@ -63,6 +63,9 @@ class AgentConfig:
         "the user's question. Respond with 'true' if sufficient, 'false' otherwise."
     )
     """Custom prompt for ValidationState"""
+
+    skip_validation: bool = True
+    """Skip validation step and proceed directly to AnswerState"""
     
     # ===== Logging & Observability =====
     enable_snapshots: bool = True

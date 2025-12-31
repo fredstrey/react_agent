@@ -28,7 +28,8 @@ class AsyncRAGAgentFSM:
     def __init__(
         self,
         embedding_manager,
-        model: str = "google/gemini-2.0-flash-exp:free"
+        model: str = "google/gemini-2.0-flash-exp:free",
+        skip_validation: bool = False
     ):
         # Initialize RAG tools
         rag_tools.initialize_rag_tools(embedding_manager)
@@ -76,7 +77,8 @@ Nunca responda diretamente sem utilizar as ferramentas de busca disponiveis.
             registry=registry,
             executor=executor,
             system_instruction=system_instruction,
-            tool_choice=None
+            tool_choice=None,
+            skip_validation=skip_validation
         )
     
     async def run_stream(

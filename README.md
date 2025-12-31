@@ -23,19 +23,25 @@ stateDiagram-v2
     [*] --> Start
     Start --> RouterState
 
-    RouterState --> ToolState : Needs Data
-    RouterState --> AnswerState : Has Answer
+    state "Reasoning Layer" as Reasoning {
+        RouterState --> ToolState : Needs Data
+        RouterState --> AnswerState : Has Answer
+    }
 
-    ToolState --> ValidationState : With Validation
-    ToolState --> AnswerState : Skip Validation
+    state "Execution Layer" as Execution {
+        ToolState --> ValidationState : With Validation (Optional)
+        ToolState --> AnswerState : Skip Validation (Default)
+        ValidationState --> AnswerState : Valid
+        ValidationState --> RetryState : Invalid
+    }
 
-    ValidationState --> AnswerState : Valid
-    ValidationState --> RetryState : Invalid
-
-    RetryState --> RouterState : Retry
-    RetryState --> FailState : Max Retries
+    state "Recovery Layer" as Recovery {
+        RetryState --> RouterState : Retry
+        RetryState --> AnswerState : Max Retries (Best Effort)
+    }
 
     AnswerState --> [*]
+    AnswerState --> FailState : Error
     FailState --> [*]
 ```
 
@@ -43,8 +49,8 @@ stateDiagram-v2
 
 - ✅ **Hierarchical States**: Organized into superstates (Reasoning, Execution, Recovery, Terminal)
 - ✅ **Context Pruning**: Automatic token management to stay within LLM limits
-- ✅ **Validation Layer**: Ensures tool outputs are valid before proceeding
-- ✅ **Retry Logic**: Automatic recovery from failed tool calls
+- ✅ **Validation Layer**: Optional "double check" for tool outputs (configurable)
+- ✅ **Retry Logic**: Automatic recovery or "best effort" answer after max retries
 - ✅ **Persistence**: Snapshots saved at every state transition
 - ✅ **Observability**: Comprehensive logging, metrics, and telemetry
 - ✅ **Streaming**: Real-time token streaming with usage tracking
