@@ -97,7 +97,63 @@ Nunca responda diretamente sem utilizar as ferramentas de busca disponiveis.
             # Default: accept any non-None result
             return result is not None
         
-        # Create async agent engine with custom validation
+        # Custom planning prompt enhancer for parallel execution
+        def enhance_rag_planning_prompt(default_prompt, context):
+            """
+            Enhances default planning prompt with RAG-specific divide-and-conquer strategy.
+            Instructs LLM to break complex financial queries into smaller independent tasks.
+            """
+            # Add RAG-specific planning instructions
+            enhancement = """
+
+ESTRATÉGIA DIVIDIR E CONQUISTAR (RAG AGENT):
+
+Para consultas financeiras complexas, você DEVE quebrar em sub-tarefas independentes:
+
+1. **Comparações de Ativos**: 
+   - Se comparar múltiplos ativos (ex: "Compare PETR4, VALE3 e ITUB4")
+   - Crie um branch para cada ativo
+   - Cada branch pesquisa um ativo específico
+
+2. **Análises Multi-Tópico**:
+   - Se a pergunta envolve múltiplos conceitos (ex: "Explique Selic, Copom e inflação")
+   - Crie um branch para cada conceito
+   - Cada branch pesquisa um conceito específico
+
+3. **Consultas Compostas**:
+   - Se combina dados + conceitos (ex: "Qual o preço do PETR4 e o que é dividend yield?")
+   - Branch 1: Buscar preço do ativo
+   - Branch 2: Buscar conceito teórico
+
+REGRAS IMPORTANTES:
+- Só paralelizar se as sub-tarefas forem INDEPENDENTES
+- Cada branch deve ter um objetivo claro e específico
+- Máximo de 3 branches.
+- Para consultas simples (1 ativo, 1 conceito), use strategy: "single"
+
+EXEMPLOS:
+
+Query: "Compare NVDA e TSLA"
+→ strategy: "parallel_research"
+→ branches: [
+    {"id": "nvda", "goal": "Pesquisar preço e dados da NVDA"},
+    {"id": "tsla", "goal": "Pesquisar preço e dados da TSLA"}
+]
+
+Query: "Qual o preço do PETR4?"
+→ strategy: "single" (consulta simples, não precisa paralelizar)
+
+Query: "Explique Selic, Copom e CDI"
+→ strategy: "parallel_research"
+→ branches: [
+    {"id": "selic", "goal": "Pesquisar conceito de Selic"},
+    {"id": "copom", "goal": "Pesquisar conceito de Copom"},
+    {"id": "cdi", "goal": "Pesquisar conceito de CDI"}
+]"""
+            
+            return default_prompt + enhancement
+        
+        # Create async agent engine with custom validation and parallel execution
         self.agent = AsyncAgentEngine(
             llm=llm,
             registry=registry,
@@ -105,7 +161,13 @@ Nunca responda diretamente sem utilizar as ferramentas de busca disponiveis.
             system_instruction=system_instruction,
             tool_choice=None,
             skip_validation=skip_validation,
-            validation_fn=rag_validation  # Pass custom validation
+            validation_fn=rag_validation,  # Custom validation
+            
+            # Enable parallel execution with custom planning
+            enable_parallel_planning=True,
+            planning_system_prompt=enhance_rag_planning_prompt,  # Incremental enhancement
+            # merge_fn=None -> uses default append merge
+            max_parallel_branches=3    # 🔥 Limit width to 3 branches per fork
         )
     
     async def run_stream(
@@ -163,7 +225,13 @@ Nunca responda diretamente sem utilizar as ferramentas de busca disponiveis.
         scores = []
         has_stock_data = False
         
-        for call in context.tool_calls or []:
+        has_stock_data = False
+        
+        # 🔥 NEW: include merged tool calls from parallel execution
+        merged_tools = await context.get_memory("merged_tool_calls", [])
+        all_calls = (context.tool_calls or []) + merged_tools
+        
+        for call in all_calls:
             tool_name = call.get("tool_name")
             result = call.get("result", {})
             
