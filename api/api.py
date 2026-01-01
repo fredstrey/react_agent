@@ -85,19 +85,14 @@ async def root():
 async def health():
     """Health check"""
     try:
-        # Check providers
-        tool_caller_ok = rag_agent.tool_caller.is_available()
-        response_gen_ok = rag_agent.response_generator.is_available()
-        
         # Check collection
         collection_info = embedding_manager.get_collection_info()
         
         return {
-            "status": "healthy" if (tool_caller_ok and response_gen_ok) else "degraded",
+            "status": "healthy",
             "components": {
-                "functiongemma": tool_caller_ok,
-                "qwen3": response_gen_ok,
-                "qdrant": "error" not in collection_info
+                "qdrant": "error" not in collection_info,
+                "embedding_manager": True
             },
             "collection": {
                 "name": collection_info.get("name", embedding_manager.collection_name),

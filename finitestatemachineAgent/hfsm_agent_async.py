@@ -17,6 +17,7 @@ from typing import AsyncIterator, Optional, List, Dict, Any
 
 from core.context_async import AsyncExecutionContext
 from core.executor_async import AsyncToolExecutor
+from finitestatemachineAgent.transition import Transition
 
 # Setup logging
 logger = logging.getLogger("AsyncAgentEngine")
@@ -43,14 +44,21 @@ if not logger.handlers:
 class AsyncHierarchicalState(ABC):
     """
     Base class for async states in the Hierarchical FSM.
+    Enforces immutability via __slots__ to prevent accidental mutable state.
     """
+    __slots__ = ("parent",)
+    
     def __init__(self, parent: Optional[AsyncHierarchicalState] = None):
         self.parent = parent
 
     @abstractmethod
-    async def handle(self, context: AsyncExecutionContext) -> Optional[AsyncHierarchicalState]:
+    async def handle(self, context: AsyncExecutionContext) -> Optional['Transition | AsyncHierarchicalState']:
         """
-        Process context and return next state (async).
+        Process context and return next state or transition.
+        Can return:
+        - Transition object (recommended for explicit semantics)
+        - AsyncHierarchicalState instance (legacy support)
+        - None (terminal state)
         """
         pass
 
@@ -140,6 +148,33 @@ class RouterState(AsyncHierarchicalState):
             messages.extend(history)
 
         messages.append({"role": "user", "content": context.user_query})
+        
+        # Add previous tool calls to context so LLM knows what was already executed
+        if context.tool_calls:
+            for call in context.tool_calls:
+                # Add assistant message with tool call
+                tool_call_id = f"call_{call['tool_name']}_{call.get('iteration', 0)}"
+                messages.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": call["tool_name"],
+                            "arguments": json.dumps(call["arguments"])
+                        }
+                    }]
+                })
+                
+                # Add tool response
+                if call.get("result") is not None:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "name": call["tool_name"],
+                        "content": str(call["result"])
+                    })
 
         # Call LLM with tools (async) - Use configured tool_choice
         response = await self.llm.chat_with_tools(
@@ -153,20 +188,7 @@ class RouterState(AsyncHierarchicalState):
         # Track token usage in context
         usage = response.get('usage', {})
         if usage:
-            # Get existing total or initialize
-            total_usage = await context.get_memory("total_usage", {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0
-            })
-            
-            # Accumulate tokens
-            total_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
-            total_usage["completion_tokens"] += usage.get("completion_tokens", 0)
-            total_usage["total_tokens"] += usage.get("total_tokens", 0)
-            
-            # Store back
-            await context.set_memory("total_usage", total_usage)
+            await context.accumulate_usage(usage)
         
         # Debug: Log what the LLM returned
         if response.get("content"):
@@ -212,11 +234,11 @@ class ToolState(AsyncHierarchicalState):
         # Execute all tools concurrently (async)
         results = await self.executor.execute_parallel(pending)
 
-        # Update context atomically
-        async with context._lock:
-            for call, result in zip(pending, results):
-                call["result"] = result
-                logger.info(f"✅ [Tool] Result for {call['tool_name']}: {str(result)[:100]}...")
+        # Update context atomically using public API
+        await context.update_tool_results(pending, results)
+        
+        for call in pending:
+            logger.info(f"✅ [Tool] Result for {call['tool_name']}: {str(call['result'])[:100]}...")
 
         # Check validation config
         if self.skip_validation:
@@ -229,27 +251,41 @@ class ToolState(AsyncHierarchicalState):
 
 class ValidationState(AsyncHierarchicalState):
     """
-    Async validation state.
+    Async validation state with customizable validation logic.
     """
-    def __init__(self, parent, llm):
+    def __init__(self, parent, llm, validation_fn=None):
         super().__init__(parent)
         self.llm = llm
+        self.validation_fn = validation_fn  # Custom validation function
 
     async def handle(self, context: AsyncExecutionContext):
         logger.info("🔍 [Validation] Checking data...")
 
-        # Build validation prompt
-        messages = [
-            {"role": "system", "content": "Validate if the tool results answer the query."},
-            {"role": "user", "content": f"Query: {context.user_query}"},
-            {"role": "user", "content": f"Results: {json.dumps(context.tool_calls[-1]['result'])}"}
-        ]
+        # Get last tool call atomically (thread-safe)
+        async with context._lock:
+            if not context.tool_calls:
+                logger.warning("⚠️ [Validation] No tool calls to validate")
+                return self.find_state_by_type("AnswerState")
+            
+            last_call = context.tool_calls[-1]
+            tool_name = last_call.get("tool_name")
+            result = last_call.get("result")
+        
+        # Use custom validation function if provided
+        if self.validation_fn:
+            is_valid = await self.validation_fn(context, tool_name, result)
+            logger.info(f"✅ [Validation] Custom validation result: {is_valid}")
+        else:
+            # Default: simple LLM-based validation
+            messages = [
+                {"role": "system", "content": "Validate if the tool results answer the query."},
+                {"role": "user", "content": f"Query: {context.user_query}"},
+                {"role": "user", "content": f"Results: {json.dumps(result)}"}
+            ]
 
-        # Call LLM (async)
-        response = await self.llm.chat(messages)
-
-        is_valid = "true" in response["content"].lower()
-        logger.info(f"✅ [Validation] Result: {is_valid}")
+            response = await self.llm.chat(messages)
+            is_valid = "true" in response["content"].lower()
+            logger.info(f"✅ [Validation] Default validation result: {is_valid}")
 
         if is_valid:
             return self.find_state_by_type("AnswerState")
@@ -264,7 +300,6 @@ class AnswerState(TerminalState):
     def __init__(self, parent, llm):
         super().__init__(parent)
         self.llm = llm
-        self.generator = None
 
     async def handle(self, context: AsyncExecutionContext):
         logger.info("✅ [Answer] Generating final response...")
@@ -309,9 +344,10 @@ class AnswerState(TerminalState):
                 "content": "Based on the tool results, provide a best-effort answer. If the information is insufficient or invalid, explain clearly what is missing. Do NOT call more tools."
             })
 
-        # Create async streaming generator
+        # Create async streaming generator and store in context
         logger.info("🌊 [Answer] Streaming initialized")
-        self.generator = self.llm.chat_stream(messages, context)
+        generator = self.llm.chat_stream(messages, context)
+        await context.set_memory("answer_stream", generator)
         return None  # Terminal state
 
 
@@ -325,7 +361,7 @@ class RetryState(AsyncHierarchicalState):
     async def handle(self, context: AsyncExecutionContext):
         logger.warning("⚠️ [Retry] Attempting recovery...")
 
-        context.current_iteration += 1
+        await context.increment_iteration()
 
         if context.current_iteration >= context.max_iterations:
             logger.warning("⚠️ [Retry] Max retries reached. Proceeding to AnswerState (Best Effort).")
@@ -363,7 +399,8 @@ class AsyncAgentEngine:
         executor: AsyncToolExecutor,
         system_instruction: str = "",
         tool_choice: Optional[str] = None,
-        skip_validation: bool = True  # Default: No validation
+        skip_validation: bool = True,  # Default: No validation
+        validation_fn=None  # Custom validation function
     ):
         self.llm = llm
         self.registry = registry
@@ -371,6 +408,7 @@ class AsyncAgentEngine:
         self.system_instruction = system_instruction
         self.tool_choice = tool_choice
         self.skip_validation = skip_validation
+        self.validation_fn = validation_fn
 
         self.states = {}
 
@@ -400,7 +438,7 @@ class AsyncAgentEngine:
         self.tool_state = ToolState(self.execution, self.executor, self.skip_validation)
         self.states["ToolState"] = self.tool_state
 
-        self.validation_state = ValidationState(self.execution, self.llm)
+        self.validation_state = ValidationState(self.execution, self.llm, self.validation_fn)
         self.states["ValidationState"] = self.validation_state
 
         self.answer_state = AnswerState(self.reasoning, self.llm)
@@ -447,7 +485,7 @@ class AsyncAgentEngine:
 
     async def dispatch(self, context: AsyncExecutionContext):
         """
-        Async state machine dispatch loop.
+        Async state machine dispatch loop with transition resolution.
         """
         current_state = self.router_state
 
@@ -456,18 +494,26 @@ class AsyncAgentEngine:
             logger.info(f"📍 [Engine] Current state: {state_name}")
 
             # Handle state (async)
-            next_state = await current_state.handle(context)
+            result = await current_state.handle(context)
 
-            if next_state is None:
+            if result is None:
                 logger.info(f"🏁 [Engine] Reached terminal state: {state_name}")
                 break
 
-            # Transition
-            next_name = type(next_state).__name__
-            logger.info(f"🔄 Transition: {state_name} -> {next_name}")
-            
+            # Resolve transition
+            if isinstance(result, Transition):
+                next_state = self._find_state_provider(result.to)
+                logger.info(f"🔄 Transition: {state_name} -> {result.to} (reason: {result.reason})")
+                if result.metadata:
+                    logger.debug(f"   Metadata: {result.metadata}")
+            else:
+                # Legacy: direct state return
+                next_state = result
+                next_name = type(next_state).__name__
+                logger.info(f"🔄 Transition: {state_name} -> {next_name}")
+
             # Save snapshot
-            self._save_snapshot(context, f"transition_{state_name}_to_{next_name}")
+            self._save_snapshot(context, f"transition_{state_name}_to_{type(next_state).__name__}")
 
             current_state = next_state
 
@@ -489,7 +535,8 @@ class AsyncAgentEngine:
         """
         context = await self.run(query, chat_history)
 
-        # Stream from AnswerState generator
-        if hasattr(self.answer_state, 'generator') and self.answer_state.generator:
-            async for token in self.answer_state.generator:
+        # Stream from context memory (not from state instance)
+        stream = await context.get_memory("answer_stream")
+        if stream:
+            async for token in stream:
                 yield token

@@ -20,6 +20,9 @@ class AsyncExecutionContext(BaseModel):
     # Original user query
     user_query: str = Field(..., description="Original user query")
     
+    # Parent context for forks (enables sub-contexts)
+    parent: Optional['AsyncExecutionContext'] = Field(default=None, description="Parent context for forks")
+    
     class Config:
         arbitrary_types_allowed = True
     
@@ -63,6 +66,76 @@ class AsyncExecutionContext(BaseModel):
         """Retrieve value from memory (async-safe)"""
         async with self._lock:
             return self.memory.get(key, default)
+
+    async def update_tool_results(self, pending: List[Dict], results: List[Any]):
+        """Update tool results atomically (replaces direct _lock access)"""
+        async with self._lock:
+            for call, result in zip(pending, results):
+                call["result"] = result
+
+    async def increment_iteration(self) -> int:
+        """Increment retry counter atomically"""
+        async with self._lock:
+            self.current_iteration += 1
+            return self.current_iteration
+
+    async def get_total_usage(self) -> Dict[str, int]:
+        """Get accumulated token usage"""
+        async with self._lock:
+            return self.memory.get("total_usage", {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            })
+
+    async def accumulate_usage(self, usage: Dict[str, int]):
+        """Accumulate token usage atomically"""
+        async with self._lock:
+            total = self.memory.get("total_usage", {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            })
+            total["prompt_tokens"] += usage.get("prompt_tokens", 0)
+            total["completion_tokens"] += usage.get("completion_tokens", 0)
+            total["total_tokens"] += usage.get("total_tokens", 0)
+            self.memory["total_usage"] = total
+
+    def fork(self) -> 'AsyncExecutionContext':
+        """
+        Create a child context with copied memory.
+        Useful for speculative execution or parallel branches.
+        """
+        from copy import deepcopy
+        
+        child = AsyncExecutionContext(
+            user_query=self.user_query,
+            parent=self
+        )
+        
+        # Deep copy memory to isolate mutations
+        child.memory = deepcopy(self.memory)
+        child.tool_calls = deepcopy(self.tool_calls)
+        child.current_iteration = self.current_iteration
+        child.max_iterations = self.max_iterations
+        
+        return child
+
+    async def merge_from_child(self, child: 'AsyncExecutionContext'):
+        """
+        Merge successful child context results back to parent.
+        """
+        async with self._lock:
+            # Merge tool calls
+            self.tool_calls.extend(child.tool_calls)
+            
+            # Merge memory (child wins on conflicts)
+            self.memory.update(child.memory)
+            
+            # Accumulate usage
+            child_usage = child.memory.get("total_usage")
+            if child_usage:
+                await self.accumulate_usage(child_usage)
 
     def snapshot(self) -> Dict[str, Any]:
         """

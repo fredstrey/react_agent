@@ -67,18 +67,45 @@ REGRAS CRITICAS:
 2. Para cotações e performance de ativos (ex: PETR4, NVDA, comparações), SEMPRE use 'get_stock_price' ou 'compare_stocks'.
 3. Use 'redirect' APENAS para assuntos totalmente fora de finanças (ex: futebol, receitas, piadas).
 
+REGRA ANTI-REDUNDÂNCIA (CRÍTICO):
+4. ANTES de chamar qualquer ferramenta, VERIFIQUE se você já tem os dados necessários nas chamadas de ferramentas anteriores (tool calls).
+5. Se você já chamou uma ferramenta e recebeu os dados, NÃO chame a mesma ferramenta novamente com os mesmos parâmetros.
+6. Use os resultados das ferramentas já executadas para responder a pergunta. Só chame uma nova ferramenta se realmente precisar de informações adicionais diferentes.
+
 Para perguntas conceituais sobre finanças, economia ou mercado financeiro, priorize sempre o uso de 'search_documents'.
 Nunca responda diretamente sem utilizar as ferramentas de busca disponiveis.
 """
         
-        # Create async agent engine
+        # Custom validation function for RAG tools
+        async def rag_validation(context, tool_name, result):
+            """
+            Custom validation logic for RAG agent tools.
+            Returns True if the tool result is valid, False otherwise.
+            """
+            if tool_name in ("get_stock_price", "compare_stocks"):
+                # For stock tools, check if result has success=True
+                return isinstance(result, dict) and result.get("success") == True
+            
+            elif tool_name == "search_documents":
+                # For document search, check if we have results
+                return isinstance(result, dict) and result.get("results") and len(result.get("results", [])) > 0
+            
+            elif tool_name == "redirect":
+                # Redirect always succeeds if it returns a result
+                return result is not None
+            
+            # Default: accept any non-None result
+            return result is not None
+        
+        # Create async agent engine with custom validation
         self.agent = AsyncAgentEngine(
             llm=llm,
             registry=registry,
             executor=executor,
             system_instruction=system_instruction,
             tool_choice=None,
-            skip_validation=skip_validation
+            skip_validation=skip_validation,
+            validation_fn=rag_validation  # Pass custom validation
         )
     
     async def run_stream(
@@ -113,9 +140,10 @@ Nunca responda diretamente sem utilizar as ferramentas de busca disponiveis.
         # Collect answer for finalization
         answer = []
         
-        # Stream from answer state
-        if hasattr(self.agent.answer_state, 'generator') and self.agent.answer_state.generator:
-            async for token in self.agent.answer_state.generator:
+        # Stream from context memory (not from state instance)
+        stream = await context.get_memory("answer_stream")
+        if stream:
+            async for token in stream:
                 answer.append(token)
                 yield token
         
