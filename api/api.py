@@ -158,6 +158,8 @@ async def stream_chat(request: ChatRequest):
                     "sources_used": await rag_agent.context.get_memory("sources_used") if hasattr(rag_agent, 'context') else [],
                     "confidence": await rag_agent.context.get_memory("confidence") if hasattr(rag_agent, 'context') else None,
                     "usage": await rag_agent.context.get_memory("total_usage") if hasattr(rag_agent, 'context') else {},
+                    # 🔥 NEW: Total requests
+                    "total_requests": await rag_agent.context.get_memory("total_requests") if hasattr(rag_agent, 'context') else 0,
                     "context": rag_agent.context.snapshot() if hasattr(rag_agent, 'context') else {}
                 }
             })

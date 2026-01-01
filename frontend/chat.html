@@ -283,7 +283,9 @@
 
                 let usageText = '';
                 if (metadata.usage) {
-                    usageText = ` | Tokens: ${metadata.usage.prompt_tokens} In / ${metadata.usage.completion_tokens} Out`;
+                    // 🔥 NEW: Show Requests
+                    const reqCount = metadata.total_requests || 0;
+                    usageText = ` | Tokens: ${metadata.usage.prompt_tokens} In / ${metadata.usage.completion_tokens} Out | Reqs: ${reqCount}`;
                 }
 
                 metaDiv.textContent = `Fontes: ${metadata.sources_used?.length || 0} | Confiança: ${metadata.confidence || 'N/A'}${usageText}`;
@@ -449,7 +451,9 @@
 
                     let usageText = '';
                     if (metadata.usage) {
-                        usageText = ` | Tokens: ${metadata.usage.prompt_tokens} In / ${metadata.usage.completion_tokens} Out`;
+                        // 🔥 NEW: Show Requests
+                        const reqCount = metadata.total_requests || 0;
+                        usageText = ` | Tokens: ${metadata.usage.prompt_tokens} In / ${metadata.usage.completion_tokens} Out | Reqs: ${reqCount}`;
                     }
 
                     metaDiv.textContent = `Fontes: ${metadata.sources_used?.length || 0} | Confiança: ${metadata.confidence || 'N/A'}${usageText}`;

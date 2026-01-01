@@ -9,6 +9,25 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import asyncio
+import copy
+import uuid
+
+class SafetyLimitExceeded(Exception):
+    """Raised when the LLM request limit is exceeded for a workflow."""
+    pass
+
+class SafetyMonitor:
+    """Tracks LLM usage across a workflow execution (shared by forks)."""
+    def __init__(self, max_requests: int = 50):
+        self.count = 0
+        self.max_requests = max_requests
+        self._lock = asyncio.Lock()
+        
+    async def increment(self):
+        async with self._lock:
+            self.count += 1
+            if self.count > self.max_requests:
+                raise SafetyLimitExceeded(f"⛔ Safety Limit Exceeded: {self.max_requests} LLM requests reached.")
 
 
 class AsyncExecutionContext(BaseModel):
@@ -26,10 +45,24 @@ class AsyncExecutionContext(BaseModel):
     class Config:
         arbitrary_types_allowed = True
     
-    def __init__(self, **data):
+    def __init__(self, safety_monitor: Optional[SafetyMonitor] = None, **data):
         super().__init__(**data)
         # Async lock (not serialized)
         object.__setattr__(self, '_lock', asyncio.Lock())
+        
+        # Shared safety monitor logic
+        if safety_monitor:
+            object.__setattr__(self, 'safety_monitor', safety_monitor)
+        elif self.parent and hasattr(self.parent, 'safety_monitor'):
+            object.__setattr__(self, 'safety_monitor', self.parent.safety_monitor)
+        else:
+            # Default monitor if none provided (e.g. legacy init)
+            object.__setattr__(self, 'safety_monitor', SafetyMonitor(max_requests=50))
+            
+    async def increment_llm_call(self):
+        """Register an LLM call and check limit."""
+        if hasattr(self, 'safety_monitor'):
+            await self.safety_monitor.increment()
     
     # Memory for arbitrary data storage
     memory: Dict[str, Any] = Field(default_factory=dict, description="Arbitrary memory")
@@ -110,7 +143,8 @@ class AsyncExecutionContext(BaseModel):
         
         child = AsyncExecutionContext(
             user_query=self.user_query,
-            parent=self
+            parent=self,
+            safety_monitor=self.safety_monitor # Propagate shared monitor
         )
         
         # Deep copy memory to isolate mutations
@@ -149,5 +183,7 @@ class AsyncExecutionContext(BaseModel):
             "max_iterations": self.max_iterations,
             "timestamp": self.timestamp.isoformat(),
             "start_time": self.start_time.isoformat(),
-            "metrics": self.metrics
+            "metrics": self.metrics,
+            # 🔥 NEW: Include request count in snapshot
+            "request_count": self.safety_monitor.count if hasattr(self, 'safety_monitor') else 0
         }

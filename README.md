@@ -25,6 +25,12 @@ stateDiagram-v2
 
     state "Reasoning Layer" as Reasoning {
         RouterState
+        ParallelPlanningState
+    }
+
+    state "Parallel Execution Layer" as Parallel {
+        ForkDispatchState
+        MergeState
     }
 
     state "Execution Layer" as Execution {
@@ -43,6 +49,14 @@ stateDiagram-v2
 
     RouterState --> ToolState : Needs Data
     RouterState --> AnswerState : Has Answer
+    
+    %% Parallel Flow
+    RouterState --> ParallelPlanningState : Check Strategy (Optional)
+    ParallelPlanningState --> ForkDispatchState : Parallel
+    ParallelPlanningState --> RouterState : Single
+    
+    ForkDispatchState --> MergeState : All Forks Done
+    MergeState --> RouterState : Merged Context
 
     ToolState --> ValidationState : With Validation (Optional)
     ToolState --> AnswerState : Skip Validation (Default)
@@ -64,8 +78,9 @@ stateDiagram-v2
 - ✅ **Context Pruning**: Automatic token management to stay within LLM limits
 - ✅ **Validation Layer**: Optional "double check" for tool outputs (configurable)
 - ✅ **Retry Logic**: Automatic recovery or "best effort" answer after max retries
+- ✅ **Circuit Breaker**: Instance-scoped "self-destruct" safety for infinite loops 🛡️
 - ✅ **Persistence**: Snapshots saved at every state transition
-- ✅ **Observability**: Comprehensive logging, metrics, and telemetry
+- ✅ **Observability**: Request counts, logging, metrics, and telemetry
 - ✅ **Streaming**: Real-time token streaming with usage tracking
 - ✅ **Extensible**: Easy to add custom states and tools
 - ⚡ **Async/Await**: Full async architecture for better performance
@@ -75,7 +90,7 @@ stateDiagram-v2
 
 ### Concurrency Safety & Validation
 
-Finance.AI implements **production-ready concurrency safety** features:
+Finance.AI implements **concurrency safety** features:
 
 **1. State Immutability**
 ```python
@@ -113,8 +128,27 @@ await parent.merge_from_child(child)  # Merge results
 **5. Anti-Redundancy System**
 - RouterState passes tool call history to LLM
 - Prevents calling same tool multiple times
-- Reduces token usage by 66%
-- 3x faster responses
+- Reduces token usage
+- Faster responses
+
+### Safety & Circuit Breaker 🛡️
+
+To prevent runaway costs and infinite loops, the agent includes a **robust safety system**:
+
+**1. Instance-Scoped Monitor**
+Each agent execution has a dedicated `SafetyMonitor` that tracks LLM requests across all forks and parallel branches.
+
+**2. Configurable Limits**
+Default limit is 50 requests per execution (changeable via `max_global_requests`).
+
+**3. Graceful Termination**
+When the limit is reached, the agent raises `SafetyLimitExceeded`, halting only that specific instance with a clear error message, without affecting the server process.
+
+**4. Visibility**
+Real-time tokens abd request counts are exposed in:
+- API Metadata
+- Context Snapshots
+- Frontend UI
 
 ### Async Architecture
 
@@ -319,68 +353,6 @@ curl -X POST http://localhost:8000/process_pdf \
     "max_tokens": 500
   }'
 ```
-
-### Python SDK
-
-```python
-from agents.rag_agent_hfsm import RAGAgentFSMStreaming
-from embedding_manager.embedding_manager import EmbeddingManager
-
-# Initialize
-embedding_manager = EmbeddingManager()
-agent = RAGAgentFSMStreaming(
-    embedding_manager=embedding_manager,
-    model="xiaomi/mimo-v2-flash:free"
-)
-
-# Run query
-token_stream, context = agent.run_stream(
-    query="What's the current price of NVDA?",
-    chat_history=[]
-)
-
-# Stream response
-for token in token_stream:
-    print(token, end="", flush=True)
-
-# Access metadata
-print(f"\nSources: {context.get_memory('sources_used')}")
-print(f"Confidence: {context.get_memory('confidence')}")
-```
-
----
-
-## 🧪 Learning Examples
-
-The `examples/` directory contains complete, runnable examples:
-
-### 1. Customer Support Agent
-**File**: `examples/customer_support_agent.py`
-
-A complete agent implementation showing:
-- How to define domain-specific tools
-- How to wrap `AgentEngine` in a custom class
-- Runable example (like `rag_agent_hfsm.py`)
-
-```bash
-python examples/customer_support_agent.py
-```
-
-### 2. Travel Agent with Custom States
-**File**: `examples/demo_custom_agent.py`
-
-Advanced example demonstrating:
-- How to create custom states (`VisaCheckState`)
-- How to modify the execution flow
-- When to use custom states vs just tools
-
-```bash
-python examples/demo_custom_agent.py
-```
-
-See `examples/README.md` for detailed tutorials.
-
----
 
 ## 🐳 Docker Deployment
 

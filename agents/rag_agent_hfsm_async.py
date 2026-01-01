@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from finitestatemachineAgent.hfsm_agent_async import AsyncAgentEngine
 from providers.llm_client_async import AsyncLLMClient
 from core.executor_async import AsyncToolExecutor
+from core.context_async import AsyncExecutionContext, SafetyMonitor, SafetyLimitExceeded
 from core.registry import ToolRegistry
 import tools.rag_tools as rag_tools
 from typing import AsyncIterator
@@ -29,7 +30,8 @@ class AsyncRAGAgentFSM:
         self,
         embedding_manager,
         model: str = "google/gemini-2.0-flash-exp:free",
-        skip_validation: bool = False
+        skip_validation: bool = False,
+        max_global_requests: int = 50
     ):
         # Initialize RAG tools
         rag_tools.initialize_rag_tools(embedding_manager)
@@ -167,7 +169,8 @@ Query: "Explique Selic, Copom e CDI"
             enable_parallel_planning=True,
             planning_system_prompt=enhance_rag_planning_prompt,  # Incremental enhancement
             # merge_fn=None -> uses default append merge
-            max_parallel_branches=3    # 🔥 Limit width to 3 branches per fork
+            max_parallel_branches=3,    # 🔥 Limit width to 3 branches per fork
+            max_global_requests=max_global_requests  # Safety limit
         )
     
     async def run_stream(
@@ -186,32 +189,40 @@ Query: "Explique Selic, Copom e CDI"
             Response tokens as they arrive
         """
         # Run agent and get context
-        from core.context_async import AsyncExecutionContext
         
-        # Create context manually to have access to it
-        context = AsyncExecutionContext(user_query=query)
+        # Create context manually with Safety Monitor
+        monitor = SafetyMonitor(max_requests=self.agent.max_global_requests)
+        context = AsyncExecutionContext(user_query=query, safety_monitor=monitor)
+        
         await context.set_memory("system_instruction", self.agent.system_instruction)
         await context.set_memory("chat_history", chat_history or [])
         
-        # Run dispatch
-        await self.agent.dispatch(context)
-        
-        # Store context for later access
-        self.context = context
-        
-        # Collect answer for finalization
-        answer = []
-        
-        # Stream from context memory (not from state instance)
-        stream = await context.get_memory("answer_stream")
-        if stream:
-            async for token in stream:
-                answer.append(token)
-                yield token
-        
-        # Finalize response with metadata
-        final_answer = "".join(answer)
-        await self._finalize_response(final_answer, context)
+        try:
+            # Run dispatch
+            await self.agent.dispatch(context)
+            
+            # Store context for later access
+            self.context = context
+            
+            # Collect answer for finalization
+            answer = []
+            
+            # Stream from context memory (not from state instance)
+            stream = await context.get_memory("answer_stream")
+            if stream:
+                async for token in stream:
+                    answer.append(token)
+                    yield token
+            
+            # Finalize response with metadata
+            final_answer = "".join(answer)
+            await self._finalize_response(final_answer, context)
+
+        except SafetyLimitExceeded as e:
+            yield f"\n\n🛑 **SYSTEM HALT**: {str(e)}"
+            # Optionally log this event
+            # logger.error(f"Circuit breaker tripped: {e}")
+            return
     
     async def _finalize_response(
         self,
@@ -259,6 +270,10 @@ Query: "Explique Selic, Copom e CDI"
         await context.set_memory("sources_used", sources_used)
         await context.set_memory("confidence", confidence)
         await context.set_memory("final_answer", content)
+        
+        # 🔥 NEW: Store total requests
+        if hasattr(context, 'safety_monitor'):
+            await context.set_memory("total_requests", context.safety_monitor.count)
     
     def _calculate_confidence(
         self,

@@ -4,6 +4,10 @@ RAG Tools using the framework pattern with decorators
 from typing import Dict, Any
 from pydantic import BaseModel, Field
 import yfinance as yf
+import logging
+
+# Configure logger
+logger = logging.getLogger("RAGTools")
 
 from core.decorators import tool
 from embedding_manager.embedding_manager import EmbeddingManager
@@ -75,13 +79,13 @@ def search_documents(query: str) -> Dict[str, Any]:
     
     try:
         # DEBUG: Log da query recebida
-        print(f"🔍 [DEBUG] search_documents called with:")
-        print(f"   query: '{query}' (len={len(query)})")
+        logger.info(f"🔍 [Search] search_documents called with query: '{query}'")
 
         # Search in Qdrant
         results = _embedding_manager.search(query=query, top_k=3)
         
-        print(f"   [DEBUG] EmbeddingManager returned: {len(results)} results")
+        
+        logger.info(f"✅ [Search] EmbeddingManager returned: {len(results)} results")
         
         # Format response
         chunks = [
@@ -95,13 +99,9 @@ def search_documents(query: str) -> Dict[str, Any]:
         
         # Debug: Print chunks
         if chunks:
-            print(f"\n📄 [DEBUG] Chunks found:")
+            logger.debug(f"📄 [Search] {len(chunks)} chunks found")
             for i, chunk in enumerate(chunks, 1):
-                content_preview = chunk["content"][:15000] + "..." if len(chunk["content"]) > 15000 else chunk["content"]
-                print(f"   Chunk {i}:")
-                print(f"      Score: {chunk['score']:.4f}")
-                print(f"      Content: {content_preview}")
-                print(f"      Metadata: {chunk['metadata']}")
+                logger.debug(f"   Chunk {i} Score: {chunk['score']:.4f}")
         
         return {
             "success": True,
@@ -132,9 +132,8 @@ def get_stock_price(ticker: str, period: str = "1mo") -> Dict[str, Any]:
     Returns:
         Dictionary with stock information
     """
-    print(f"🔍 [DEBUG] get_stock_price called with:")
-    print(f"   ticker: {ticker} (type: {type(ticker)})")
-    print(f"   period: {period}")
+
+    logger.info(f"🔍 [StockPrice] get_stock_price called for: {ticker} ({period})")
     try:
         ticker = ticker.upper()
         
@@ -177,7 +176,7 @@ def get_stock_price(ticker: str, period: str = "1mo") -> Dict[str, Any]:
             "sector": info.get('sector'),
             "summary": f"{info.get('longName', ticker)} está cotado a ${round(last_close, 2)} {info.get('currency', 'USD')}. No período de {period}, a ação variou {round(change_percent, 2)}%."
         }
-        print(f"   ✅ [DEBUG] Resposta: {result}")
+        logger.info(f"✅ [StockPrice] Success for {ticker}")
         return result
     except Exception as e:
         error_msg = str(e)
@@ -210,9 +209,8 @@ def compare_stocks(tickers: list, period: str = "1mo") -> Dict[str, Any]:
     Returns:
         Comparison of stock performance
     """
-    print(f"🔍 [DEBUG] compare_stocks chamada com:")
-    print(f"   tickers: {tickers} (type: {type(tickers)})")
-    print(f"   period: {period}")
+
+    logger.info(f"🔍 [CompareStocks] compare_stocks called for: {tickers} ({period})")
     try:
         # Handle both list and string formats
         if isinstance(tickers, list):
@@ -225,7 +223,7 @@ def compare_stocks(tickers: list, period: str = "1mo") -> Dict[str, Any]:
                 "error": f"Formato inválido para tickers: {type(tickers)}"
             }
         
-        print(f"   [DEBUG] ticker_list processed: {ticker_list}")
+        logger.debug(f"📋 [CompareStocks] Normalized tickers: {ticker_list}")
         
         if len(ticker_list) < 2:
             return {
@@ -285,7 +283,7 @@ def compare_stocks(tickers: list, period: str = "1mo") -> Dict[str, Any]:
             "failed_tickers": failed_tickers,
             "summary": summary
         }
-        print(f"   ✅ [DEBUG] Response: {result}")
+        logger.info(f"✅ [CompareStocks] Comparison successful for {len(results)} stocks")
         return result
     except Exception as e:
         error_msg = str(e)
