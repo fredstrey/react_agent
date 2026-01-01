@@ -178,9 +178,19 @@ class RouterState(AsyncHierarchicalState):
         messages = [{"role": "system", "content": system_instruction}]
 
         # Add chat history
+        # 🔥 Optimization: Skip history if intent was analyzed (query is already enhanced)
+        # or if this is a fork (context pollution)
+        intent_analyzed = await context.get_memory("intent_analyzed", False)
+        is_root = context.parent is None
+        
+        should_include_history = is_root and not intent_analyzed
+        
         history = await context.get_memory("chat_history", [])
-        if history:
+        if history and should_include_history:
+            logger.info(f"📜 [Router] Including {len(history)} history messages")
             messages.extend(history)
+        elif history:
+            logger.info("🧹 [Router] Skipping history (Intent analyzed or Fork)")
 
         messages.append({"role": "user", "content": context.user_query})
         
@@ -952,55 +962,33 @@ class AnswerState(TerminalState):
                 "content": "Based on the tool results, provide a best-effort answer. If the information is insufficient or invalid, explain clearly what is missing. Do NOT call more tools."
             })
 
-        # 🔥 Check if streaming is enabled (default: True)
-        enable_streaming = await context.get_memory("enable_streaming", True)
-        
-        # Build final answer
-        messages.append({"role": "user", "content": context.user_query})
-        
-        if enable_streaming:
-            # Stream response
-            logger.info("🌊 [Answer] Streaming initialized")
-            # 🛡️ Safety Check Before LLM Call (Streaming)
-            await context.increment_llm_call()
-            stream = self.llm.chat_stream(messages, context)
-            
-            # Store stream for consumption
-            await context.set_memory("answer_stream", stream)
-        else:
-            # Non-streaming response
-            logger.info("📝 [Answer] Generating complete response")
-            # 🛡️ Safety Check Before LLM Call (Non-Streaming)
-            await context.increment_llm_call()
-            # 🔥 Fix: chat() only takes messages, not context
-            response = await self.llm.chat(messages)
-            
-            # Manually track usage if available
-            if "usage" in response:
-                await context.accumulate_usage(response["usage"])
-                
-            final_answer = response.get("content", "")
-            
-            # Store for access
-            await context.set_memory("final_answer", final_answer)
-            
-            # Create fake stream for compatibility
-            async def stream_complete():
-                for char in final_answer:
-                    yield char
-            
-            await context.set_memory("answer_stream", stream_complete())
-        
-        # 🔥 NEW: Check for synthesis result first (from SemanticSynthesisState)
+        # 1. Inject Context (Synthesis FIRST, then Contracts)
         synthesis_result = await context.get_memory("synthesis_result")
         
         if synthesis_result and synthesis_result.get("answer"):
-            # Use synthesized answer (already natural language)
-            logger.info(f"📝 [Answer] Using synthesized answer ({len(synthesis_result['answer'])} chars)")
-            # Note: Synthesis is already the final answer, we'll stream it directly
+            # Inject synthesized context
+            logger.info(f"📚 [Answer] Injecting synthesized context ({len(synthesis_result['answer'])} chars)")
+            logger.info(f"🔍 [Answer] Synthesis preview: {synthesis_result['answer'][:100]}...")
+            messages.append({
+                "role": "system",
+                "content": f"""Use the following synthesized research findings to answer the user's question.
+
+CRITICAL INSTRUCTIONS:
+1. **LANGUAGE CONSISTENCY**: You MUST answer in the SAME LANGUAGE as the user's query.
+   - If user asks in Portuguese -> Answer in Portuguese
+   - If user asks in English -> Answer in English
+   - If user asks in Spanish -> Answer in Spanish
+   - DO NOT translate technical terms if they are standard in the field, but explain them if needed.
+
+2. **Use the findings**: The provided text is a synthesis of multiple sources. Use it as the primary source of truth.
+3. **Natural presentation**: Present the answer naturally to the user.
+
+SYNTHESIZED FINDINGS:
+{synthesis_result['answer']}"""
+            })
             
         else:
-            # No synthesis - check for raw contracts (fallback)
+            # Fallback to research context (contracts)
             research_context = await context.get_memory("research_context")
             if research_context and isinstance(research_context, dict):
                 # Check if it's a MergedContract (has 'resolved' and 'conflicts' keys)
@@ -1037,12 +1025,6 @@ class AnswerState(TerminalState):
                     
                     # 🔥 DEBUG: Log contract being injected
                     logger.info(f"📝 [Answer] Contract text being injected ({len(contract_text)} chars):")
-                    logger.info(f"   Resolved claims: {len(research_context.get('resolved', {}))}")
-                    logger.info(f"   Conflicts: {len(research_context.get('conflicts', {}))}")
-                    if research_context.get('resolved'):
-                        logger.info(f"   Resolved keys: {list(research_context['resolved'].keys())}")
-                    if research_context.get('conflicts'):
-                        logger.info(f"   Conflict keys: {list(research_context['conflicts'].keys())}")
                     
                     messages.append({
                         "role": "system",
@@ -1060,13 +1042,6 @@ CRITICAL INSTRUCTIONS:
 4. **Be transparent about gaps**: Mention OMISSIONS clearly when information is missing
 5. **Natural presentation**: DO NOT mention "contracts", "claims", "resolved", or "conflicts" in your response
 6. **User-facing language**: Present findings as if you researched them directly
-
-Example of GOOD response (Portuguese query):
-"Com base na pesquisa, o leasing é classificado como financiamento indireto. No entanto, existem diferentes perspectivas sobre..."
-
-Example of BAD response:
-"According to the resolved claims..." (Wrong language if query is PT)
-"Segundo as claims resolvidas no contrato..." (Exposing internal structure)
 
 Remember: The user should NOT see the internal contract structure. Present information naturally in the CORRECT LANGUAGE."""
                     })
@@ -1086,28 +1061,45 @@ Remember: The user should NOT see the internal contract structure. Present infor
                         "content": json.dumps(research_context, ensure_ascii=False, indent=2)
                     })
 
-        # Create async streaming generator and store in context
-        logger.info("🌊 [Answer] Streaming initialized")
+        # 2. Add User Query
+        messages.append({"role": "user", "content": context.user_query})
         
-        # Check if we have synthesis (already complete answer)
-        synthesis_result = await context.get_memory("synthesis_result")
+        # 3. Call LLM (Streaming or Non-Streaming)
+        enable_streaming = await context.get_memory("enable_streaming", True)
         
-        if synthesis_result and synthesis_result.get("answer"):
-            # Stream synthesis directly (no LLM call needed)
-            async def synthesis_stream():
-                # Yield synthesis in chunks for consistent streaming interface
-                answer = synthesis_result["answer"]
-                chunk_size = 50
-                for i in range(0, len(answer), chunk_size):
-                    yield answer[i:i+chunk_size]
-            
-            await context.set_memory("answer_stream", synthesis_stream())
-        else:
-            # Normal LLM streaming
+        if enable_streaming:
+            # Stream response
+            logger.info("🌊 [Answer] Streaming initialized")
             # 🛡️ Safety Check Before LLM Call (Streaming)
             await context.increment_llm_call()
             stream = self.llm.chat_stream(messages, context)
+            
+            # Store stream for consumption
             await context.set_memory("answer_stream", stream)
+        else:
+            # Non-streaming response
+            logger.info("📝 [Answer] Generating complete response")
+            # 🛡️ Safety Check Before LLM Call (Non-Streaming)
+            await context.increment_llm_call()
+            # 🔥 Fix: chat() only takes messages, not context
+            response = await self.llm.chat(messages)
+            
+            # Manually track usage if available
+            if "usage" in response:
+                await context.accumulate_usage(response["usage"])
+                
+            final_answer = response.get("content", "")
+            
+            # Store for access
+            await context.set_memory("final_answer", final_answer)
+            
+            # Create fake stream for compatibility
+            async def stream_complete():
+                for char in final_answer:
+                    yield char
+            
+            await context.set_memory("answer_stream", stream_complete())
+            
         return None  # Terminal state
 
 
