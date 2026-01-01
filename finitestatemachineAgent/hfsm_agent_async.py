@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from core.context_async import AsyncExecutionContext, SafetyMonitor
 from core.executor_async import AsyncToolExecutor
 from finitestatemachineAgent.transition import Transition
+from finitestatemachineAgent.fork_states import ResearchForkState, ForkSummaryState
 
 # Setup logging
 logger = logging.getLogger("AsyncAgentEngine")
@@ -156,22 +157,8 @@ class RouterState(AsyncHierarchicalState):
     async def handle(self, context: AsyncExecutionContext):
         logger.info("🧠 [Router] Thinking...")
         
-        # 🔥 NEW: Inject merged context from parallel execution
-        merged = await context.get_memory("merged_context")
-        if merged:
-            logger.info(f"📦 [Router] Injecting merged context from {merged.get('total_branches', 0)} branches")
-            
-            # Append merged research to user query
-            # Append merged research to user query
-            # Use default=str to handle non-serializable objects safely (like generators)
-            context.user_query += (
-                "\n\n--- Parallel Research Results ---\n"
-                + json.dumps(merged, indent=2, default=str)
-                + "\n--- End of Research ---\n"
-            )
-            
-            # Clear merged context to avoid re-injection
-            await context.set_memory("merged_context", None)
+        # 🔥 REMOVED: Old merged_context injection (now handled in AnswerState)
+        # Research context is now injected ONLY in AnswerState for better control
 
         # 🔥 NEW: Check for parallel planning BEFORE calling LLM
         # Only if enabled, not checked yet, AND IS ROOT CONTEXT (no parents allowed to fork)
@@ -293,7 +280,16 @@ class ToolState(AsyncHierarchicalState):
         # Check validation config
         if self.skip_validation:
             logger.info("⏩ [Tool] Skipping validation (configured)")
-            return Transition(to="AnswerState", reason="Validation skipped by config")
+            
+            # 🔥 NEW: Check if we're in a fork context
+            branch_id = await context.get_memory("branch_id")
+            if branch_id:
+                # Fork flow: go to ForkSummaryState
+                logger.info(f"🌿 [Tool] Fork context detected, proceeding to summary")
+                return Transition(to="ForkSummaryState", reason="Fork tool execution complete")
+            else:
+                # Normal flow: go to AnswerState
+                return Transition(to="AnswerState", reason="Validation skipped by config")
         else:
             logger.info("🔍 [Tool] Proceeding to validation")
             return Transition(to="ValidationState", reason="Validation required")
@@ -532,6 +528,13 @@ class ForkDispatchState(AsyncHierarchicalState):
             # Override user query with branch goal
             fork_ctx.user_query = f"{context.user_query}\n\nBranch goal: {branch.goal}"
             
+            # 🔥 NEW: Detailed logging for observability
+            logger.info(f"🌿 [ForkDispatch] Creating fork '{branch.id}':")
+            logger.info(f"   📋 Task: {branch.goal}")
+            logger.info(f"   📝 Query: {fork_ctx.user_query[:200]}..." if len(fork_ctx.user_query) > 200 else f"   📝 Query: {fork_ctx.user_query}")
+            if branch.constraints:
+                logger.info(f"   ⚠️  Constraints: {', '.join(branch.constraints)}")
+            
             fork_contexts.append((branch.id, fork_ctx))
         
         # Execute all forks in parallel
@@ -550,6 +553,18 @@ class ForkDispatchState(AsyncHierarchicalState):
                     successful_forks.append(fork_ctx)
                     logger.info(f"✅ [ForkDispatch] Branch {branch_id} completed")
             
+            # 🔥 NEW: Accumulate token usage from all forks back to parent
+            total_fork_tokens = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            for fork_ctx in successful_forks:
+                fork_usage = await fork_ctx.get_total_usage()
+                total_fork_tokens["prompt_tokens"] += fork_usage.get("prompt_tokens", 0)
+                total_fork_tokens["completion_tokens"] += fork_usage.get("completion_tokens", 0)
+                total_fork_tokens["total_tokens"] += fork_usage.get("total_tokens", 0)
+            
+            if total_fork_tokens["total_tokens"] > 0:
+                await context.accumulate_usage(total_fork_tokens)
+                logger.info(f"📊 [ForkDispatch] Accumulated {total_fork_tokens['total_tokens']} tokens from {len(successful_forks)} fork(s)")
+            
             # Store results
             await context.set_memory("fork_results", successful_forks)
             
@@ -567,8 +582,9 @@ class ForkDispatchState(AsyncHierarchicalState):
         """Execute a single fork through the engine."""
         logger.info(f"🌿 [Fork:{branch_id}] Starting execution")
         
-        # Start from RouterState for this fork
-        initial_state = self.find_state_by_type("RouterState")
+        # 🔥 NEW: Start from ResearchForkState (not RouterState)
+        # This bypasses the full Router logic for efficiency
+        initial_state = self.find_state_by_type("ResearchForkState")
         await self.engine.dispatch(fork_ctx)
         
         logger.info(f"🌿 [Fork:{branch_id}] Execution complete")
@@ -589,18 +605,6 @@ class MergeState(AsyncHierarchicalState):
         
         # Get fork results
         fork_results = await context.get_memory("fork_results", [])
-        plan_data = await context.get_memory("parallel_plan")
-        
-        # Robust deserialization of plan
-        plan = None
-        if plan_data:
-            if isinstance(plan_data, dict):
-                try:
-                    plan = ParallelPlan(**plan_data)
-                except Exception as e:
-                    logger.error(f"❌ [Merge] Invalid plan data: {e}")
-            elif isinstance(plan_data, ParallelPlan):
-                plan = plan_data
         
         if not fork_results:
             logger.warning("⚠️ [Merge] No fork results to merge")
@@ -611,59 +615,63 @@ class MergeState(AsyncHierarchicalState):
         # Use custom merge function if provided
         if self.merge_fn:
             try:
+                plan_data = await context.get_memory("parallel_plan")
+                plan = None
+                if isinstance(plan_data, dict):
+                    plan = ParallelPlan(**plan_data)
+                elif isinstance(plan_data, ParallelPlan):
+                    plan = plan_data
+                    
                 merged = await self.merge_fn(context, fork_results, plan)
                 logger.info("✅ [Merge] Custom merge completed")
             except Exception as e:
                 logger.error(f"❌ [Merge] Custom merge failed: {e}, using default")
-                merged = self._default_append_merge(fork_results)
+                merged = self._semantic_merge(fork_results)
         else:
-            merged = self._default_append_merge(fork_results)
-            logger.info("✅ [Merge] Default append merge completed")
+            # 🔥 NEW: Use semantic merge by default
+            merged = self._semantic_merge(fork_results)
+            logger.info("✅ [Merge] Semantic merge completed")
         
-        # 🔥 NEW: Aggregate all fork tool calls for metadata persistence (sources, etc)
-        all_fork_tools = []
-        for fork in fork_results:
-            if fork.tool_calls:
-                # Add branch_id to tool call for tracing if not present
-                branch_id = fork.memory.get("branch_id", "unknown")
-                for tool in fork.tool_calls:
-                    tool["branch_id"] = branch_id
-                all_fork_tools.extend(fork.tool_calls)
+        # Store merged results as research_context (used by AnswerState)
+        await context.set_memory("research_context", merged)
         
-        if all_fork_tools:
-            logger.info(f"📊 [Merge] Aggregated {len(all_fork_tools)} total tool calls from forks")
-            await context.set_memory("merged_tool_calls", all_fork_tools)
-        
-        # Store merged results
-        await context.set_memory("merged_context", merged)
-        
-        # Continue to RouterState with merged context
-        return Transition(to="RouterState", reason="Context merged successfully", metadata={"source_count": len(all_fork_tools)})
+        # Continue to RouterState (which will then go to AnswerState)
+        return Transition(to="RouterState", reason="Research context merged", metadata={"branches": len(fork_results)})
     
-    def _default_append_merge(self, fork_results: List[AsyncExecutionContext]) -> dict:
-        """Default merge strategy: simple append of all results."""
-        outputs = []
+    def _semantic_merge(self, fork_results: List[AsyncExecutionContext]) -> dict:
+        """Semantic merge strategy: extract structured summaries from forks."""
+        research = []
         
         for fork_ctx in fork_results:
-            branch_id = fork_ctx.memory.get("branch_id", "unknown")
+            # Get the final_summary created by ForkSummaryState
+            final_summary = fork_ctx.memory.get("final_summary")
             
-            # Sanitize memory to remove streams/generators
-            sanitized_memory = fork_ctx.memory.copy()
-            if "answer_stream" in sanitized_memory:
-                del sanitized_memory["answer_stream"]
+            if final_summary:
+                # Use the structured summary
+                research.append(final_summary)
+            else:
+                # Fallback: construct from available data
+                branch_id = fork_ctx.memory.get("branch_id", "unknown")
+                branch_goal = fork_ctx.memory.get("branch_goal", "")
                 
-            outputs.append({
-                "branch_id": branch_id,
-                "branch_goal": fork_ctx.memory.get("branch_goal", ""),
-                "tool_calls": fork_ctx.tool_calls,
-                "memory": sanitized_memory,
-                "snapshot": fork_ctx.snapshot()
-            })
+                # Extract tool results
+                sources = []
+                for call in fork_ctx.tool_calls:
+                    sources.append({
+                        "tool": call["tool_name"],
+                        "result": str(call.get("result", ""))[:300]
+                    })
+                
+                research.append({
+                    "branch_id": branch_id,
+                    "goal": branch_goal,
+                    "summary": f"Executed {len(sources)} tool(s)",
+                    "sources": sources
+                })
         
         return {
-            "strategy": "append",
-            "branches": outputs,
-            "total_branches": len(outputs)
+            "research": research,
+            "total_branches": len(research)
         }
 
 
@@ -716,6 +724,19 @@ class AnswerState(TerminalState):
             messages.append({
                 "role": "system",
                 "content": "Based on the tool results, provide a best-effort answer. If the information is insufficient or invalid, explain clearly what is missing. Do NOT call more tools."
+            })
+
+        # 🔥 NEW: Inject research context from parallel execution (if exists)
+        research_context = await context.get_memory("research_context")
+        if research_context:
+            logger.info(f"📚 [Answer] Injecting research from {research_context.get('total_branches', 0)} branches")
+            messages.append({
+                "role": "system",
+                "content": "Use the following research results to answer the user's question:"
+            })
+            messages.append({
+                "role": "user",
+                "content": json.dumps(research_context, ensure_ascii=False, indent=2)
             })
 
         # Create async streaming generator and store in context
@@ -869,6 +890,18 @@ class AsyncAgentEngine:
             
             self.merge_state = MergeState(self.execution, self.merge_fn)
             self.states["MergeState"] = self.merge_state
+            
+            # 🔥 NEW: Fork-specific states
+            self.research_fork_state = ResearchForkState(
+                self.reasoning,
+                self.llm,
+                self.registry,
+                self.tool_choice
+            )
+            self.states["ResearchForkState"] = self.research_fork_state
+            
+            self.fork_summary_state = ForkSummaryState(self.terminal, self.llm)
+            self.states["ForkSummaryState"] = self.fork_summary_state
             
             logger.info("✅ Parallel execution states initialized")
 

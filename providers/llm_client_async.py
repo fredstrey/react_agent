@@ -80,6 +80,12 @@ class AsyncLLMClient:
             Response tokens
         """
         async for token in self.provider.chat_stream(messages):
-            yield token
-        
-        # TODO: Update context with usage stats if provided
+            # Check if token is usage metadata (dict with __usage__ key)
+            if isinstance(token, dict) and "__usage__" in token:
+                # Accumulate usage to context if provided
+                if context:
+                    await context.accumulate_usage(token["__usage__"])
+            else:
+                # Regular content token
+                yield token
+

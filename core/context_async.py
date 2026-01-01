@@ -136,21 +136,33 @@ class AsyncExecutionContext(BaseModel):
 
     def fork(self) -> 'AsyncExecutionContext':
         """
-        Create a child context with copied memory.
-        Useful for speculative execution or parallel branches.
-        """
-        from copy import deepcopy
+        Create a lightweight child context for parallel execution.
         
+        Light Fork Design:
+        - Does NOT inherit tool_calls history (starts fresh)
+        - Does NOT deep copy full memory (only essential metadata)
+        - DOES share safety_monitor (global request tracking)
+        - user_query will be overridden by ForkDispatchState with branch goal
+        
+        This minimalist approach reduces token costs and prevents context explosion.
+        """
         child = AsyncExecutionContext(
-            user_query=self.user_query,
+            user_query="",  # Will be set explicitly by ForkDispatchState
             parent=self,
-            safety_monitor=self.safety_monitor # Propagate shared monitor
+            safety_monitor=self.safety_monitor  # Shared monitor for global limits
         )
         
-        # Deep copy memory to isolate mutations
-        child.memory = deepcopy(self.memory)
-        child.tool_calls = deepcopy(self.tool_calls)
-        child.current_iteration = self.current_iteration
+        # Initialize with minimal memory (branch metadata only)
+        # ForkDispatchState will populate: branch_id, branch_goal, branch_constraints
+        child.memory = {
+            "parent_query": self.user_query  # Keep reference to original query
+        }
+        
+        # Start with empty tool history (fork executes independently)
+        child.tool_calls = []
+        
+        # Inherit iteration limits but reset counter
+        child.current_iteration = 0
         child.max_iterations = self.max_iterations
         
         return child

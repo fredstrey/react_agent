@@ -167,12 +167,16 @@ class AsyncOpenRouterProvider:
             
         Yields:
             Response tokens as they arrive
+            
+        Note:
+            Usage information is sent as the last chunk with a special marker.
         """
         payload = {
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
-            "stream": True
+            "stream": True,
+            "stream_options": {"include_usage": True}  # Request usage in stream
         }
         
         headers = {
@@ -181,6 +185,8 @@ class AsyncOpenRouterProvider:
             "HTTP-Referer": "https://github.com/fredstrey/react_agent",
             "X-Title": "Finance.AI"
         }
+        
+        usage_data = None
         
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             async with client.stream(
@@ -200,9 +206,19 @@ class AsyncOpenRouterProvider:
                         
                         try:
                             data = json.loads(data_str)
-                            delta = data["choices"][0]["delta"]
                             
+                            # Check for usage information
+                            if "usage" in data:
+                                usage_data = data["usage"]
+                            
+                            # Yield content tokens
+                            delta = data["choices"][0]["delta"]
                             if "content" in delta:
                                 yield delta["content"]
                         except json.JSONDecodeError:
                             continue
+        
+        # Yield usage as a special marker (dict instead of string)
+        if usage_data:
+            yield {"__usage__": usage_data}
+
