@@ -243,7 +243,7 @@ DIRETRIZES DE RESPOSTA RÁPIDA:
         self,
         query: str,
         chat_history=None,
-        enable_streaming: bool = True  # 🔥 NEW: Control streaming
+        enable_streaming: bool = True  # - Control streaming
     ) -> AsyncIterator[str]:
         """
         Run agent with async streaming.
@@ -347,7 +347,7 @@ DIRETRIZES DE RESPOSTA RÁPIDA:
         await context.set_memory("confidence", confidence)
         await context.set_memory("final_answer", content)
         
-        # 🔥 NEW: Store total requests
+        # - Store total requests
         if hasattr(context, 'safety_monitor'):
             await context.set_memory("total_requests", context.safety_monitor.count)
     

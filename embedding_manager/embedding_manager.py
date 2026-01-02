@@ -1,7 +1,7 @@
 import ollama
 from typing import List, Dict, Optional
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 import uuid
 
 
@@ -12,7 +12,8 @@ class EmbeddingManager:
         self,
         embedding_model: str = "qwen3-embedding:0.6b",
         qdrant_url: str = "http://localhost:6333",
-        collection_name: str = "rag_api"
+        collection_name: str = "rag_api",
+        filter: Optional[str] = "Constituição da República Federativa do Brasil"
     ):
         """
         Initialize the embedding manager
@@ -21,6 +22,7 @@ class EmbeddingManager:
             embedding_model: Model for generating embeddings
             qdrant_url: Qdrant server URL
             collection_name: Collection name in Qdrant
+            filter: Default source filter for searches
         """
         self.embedding_model = embedding_model
         self.collection_name = collection_name
@@ -30,6 +32,7 @@ class EmbeddingManager:
         
         # Embedding dimension (will be detected automatically)
         self.embedding_dim: Optional[int] = None
+        self.filter: Optional[str] = filter
         
     def _get_embedding(self, text: str) -> List[float]:
         """
@@ -135,22 +138,28 @@ class EmbeddingManager:
         
         print(f"✅ {len(documents)} documents added successfully!")
     
-    def search(self, query: str, top_k: int = 3) -> List[Dict]:
+    def search(self, query: str, top_k: int = 5, filter: Optional[str] = None) -> List[Dict]:
         """
         Search for similar documents
         
         Args:
             query: Text of the query
             top_k: Number of results to return
+            filter: Optional filter by source
             
         Returns:
             List of dictionaries with content, score and metadata
         """
+        # Assign default filter from instance if not provided
+        if filter is None:
+            filter = self.filter
+
         # DEBUG
         print(f"🔎 [DEBUG] EmbeddingManager.search() called:")
         print(f"   collection_name: {self.collection_name}")
         print(f"   query: '{query}'")
         print(f"   top_k: {top_k}")
+        print(f"   filter source: {filter}")
         
         # Generate query embedding
         query_embedding = self._get_embedding(query)
@@ -159,10 +168,24 @@ class EmbeddingManager:
         # Search in Qdrant using query_points
         from qdrant_client.models import SearchRequest
         
+        # Construct filter condition if filter is provided
+        query_filter = None
+        if filter:
+            query_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="source",
+                        match=MatchValue(value=filter)
+                    )
+                ]
+            )
+
+        # Search in Qdrant using query_points with query_filter
         results = self.qdrant_client.query_points(
             collection_name=self.collection_name,
             query=query_embedding,
-            limit=top_k
+            limit=top_k,
+            query_filter=query_filter 
         ).points
         
         print(f"   results from Qdrant: {len(results)} points")

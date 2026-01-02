@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Finance.AI - Assistente Financeiro</title>
+    <title>Legal.AI - Consultor Jurídico</title>
     <style>
         * {
             margin: 0;
@@ -14,7 +14,7 @@
 
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #8E0E00 0%, #1F1C18 100%);
             min-height: 100vh;
             display: flex;
             justify-content: center;
@@ -36,7 +36,7 @@
         }
 
         .chat-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #8E0E00 0%, #1F1C18 100%);
             color: white;
             padding: 20px;
             text-align: center;
@@ -96,11 +96,11 @@
         }
 
         .message.user .message-avatar {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #8E0E00 0%, #1F1C18 100%);
         }
 
         .message.assistant .message-avatar {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            background: linear-gradient(135deg, #cb2d3e 0%, #ef473a 100%);
         }
 
         .message-content {
@@ -111,7 +111,7 @@
         }
 
         .message.user .message-content {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #8E0E00 0%, #1F1C18 100%);
             color: white;
         }
 
@@ -135,7 +135,7 @@
         .typing-indicator span {
             width: 8px;
             height: 8px;
-            background: #667eea;
+            background: #cb2d3e;
             border-radius: 50%;
             animation: typing 1.4s infinite;
         }
@@ -183,14 +183,14 @@
         }
 
         .chat-input:focus {
-            border-color: #667eea;
+            border-color: #cb2d3e;
         }
 
         .send-button {
             width: 50px;
             height: 50px;
             border: none;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #cb2d3e 0%, #ef473a 100%);
             color: white;
             border-radius: 50%;
             cursor: pointer;
@@ -220,8 +220,8 @@
 <body>
     <div class="chat-container">
         <div class="chat-header">
-            <h1>💰 Finance.AI</h1>
-            <p>Assistente Especializado em Finanças e Economia</p>
+            <h1>⚖️ Legal.AI</h1>
+            <p>Consultor Jurídico Especializado em Direito e Legislação</p>
         </div>
 
         <div class="history-info">
@@ -232,16 +232,16 @@
             <div class="message assistant">
                 <div class="message-avatar">🤖</div>
                 <div class="message-content">
-                    Olá! Sou o Finance.AI, seu assistente especializado em finanças e economia.
-                    Posso ajudar com informações sobre taxa Selic, inflação, PIB, análise de ações e muito mais!
+                    Olá! Sou o Legal.AI, seu consultor jurídico especializado.
+                    Posso ajudar com pesquisas em leis, códigos e conceitos jurídicos, além de analisar documentos.
                 </div>
             </div>
         </div>
 
         <div class="chat-input-container">
             <div class="chat-input-wrapper">
-                <input type="text" class="chat-input" id="messageInput"
-                    placeholder="Digite sua pergunta sobre finanças..." autocomplete="off">
+                <input type="text" class="chat-input" id="messageInput" placeholder="Digite sua dúvida jurídica..."
+                    autocomplete="off">
                 <button class="send-button" id="sendButton">➤</button>
             </div>
         </div>
@@ -249,7 +249,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
-        const API_URL = 'http://localhost:8000/stream';
+        const API_URL = 'http://localhost:8000/stream_legalai';
         const chatMessages = document.getElementById('chatMessages');
         const messageInput = document.getElementById('messageInput');
         const sendButton = document.getElementById('sendButton');

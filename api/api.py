@@ -22,13 +22,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from api_schemas import ChatRequest, ChatResponse, ProcessPDFRequest, ProcessPDFResponse
 from embedding_manager.embedding_manager import EmbeddingManager
 from agents.finance_ai import FinanceAI
+from agents.legal_ai import LegalAI
 from pdf_pipeline.pdf_processor import PDFProcessor
 import agents.finance_ai_tools as finance_ai_tools
 
 # Initialize FastAPI
 app = FastAPI(
     title="ReAct Agent API",
-    description="API de chat com ReAct Agent usando FunctionGemma",
+    description="API with HFSM Agent",
     version="2.0.0"
 )
 
@@ -48,7 +49,8 @@ print("🚀 Initializing components...")
 embedding_manager = EmbeddingManager(
     embedding_model="qwen3-embedding:0.6b",
     qdrant_url=os.getenv("QDRANT_URL", "http://localhost:6333"),
-    collection_name="rag_api"
+    collection_name="rag_api",
+    filter="Constituição da República Federativa do Brasil"
 )
 
 # Initialize collection if necessary
@@ -135,7 +137,7 @@ async def stream_chat(request: ChatRequest):
             # -----------------------------
             finance_ai = FinanceAI(
                 llm_provider="openrouter",
-                model="xiaomi/mimo-v2-flash:free"
+                model="google/gemini-2.0-flash-exp:free"
             )
 
             # -----------------------------
@@ -156,6 +158,88 @@ async def stream_chat(request: ChatRequest):
             # Collect metadata from agent's last execution context
             if hasattr(finance_ai.agent, 'last_context'):
                 ctx = finance_ai.agent.last_context
+                
+                # Get all metadata (already populated by agent)
+                token_usage = await ctx.get_memory("total_usage", {})
+                total_requests = await ctx.get_memory("total_requests", 0)
+                sources_used = await ctx.get_memory("sources_used", [])
+                confidence = await ctx.get_memory("confidence", "-")
+            else:
+                token_usage = {}
+                total_requests = 0
+                sources_used = []
+                confidence = "-"
+            
+            yield json.dumps({
+                "type": "metadata",
+                "content": "",
+                "metadata": {
+                    "conversation_id": conversation_id,
+                    "sources_used": sources_used,
+                    "confidence": confidence,
+                    "usage": token_usage,
+                    "total_requests": total_requests
+                }
+            })
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield json.dumps({
+                "type": "error",
+                "content": str(e),
+                "metadata": {}
+            })
+
+    return EventSourceResponse(generate_stream())
+
+@app.post("/stream_legalai")
+async def stream_chat_legalai(request: ChatRequest):
+    """
+    Chat endpoint with async streaming using HFSM Agent.
+    
+    Now fully async for better performance and concurrency!
+    """
+
+    conversation_id = request.conversation_id or str(uuid.uuid4())
+
+    async def generate_stream() -> AsyncGenerator[str, None]:
+        try:
+            # -----------------------------
+            # 1. Process chat history
+            # -----------------------------
+            chat_history = []
+            if request.chat_history:
+                history_dicts = [msg.model_dump() for msg in request.chat_history]
+                chat_history = history_dicts[-6:]  # last 3 turns
+
+            # -----------------------------
+            # 2. Initialize Legal.AI agent
+            # -----------------------------
+            legal_ai = LegalAI(
+                llm_provider="openrouter",
+                model="xiaomi/mimo-v2-flash:free",
+                embedding_manager=embedding_manager
+            )
+
+            # -----------------------------
+            # 3. Stream tokens (fully async!)
+            # -----------------------------
+            async for token in legal_ai.stream(
+                query=request.message,
+                chat_history=chat_history
+            ):
+                yield json.dumps({
+                    "type": "token",
+                    "content": token
+                })
+
+            # -----------------------------
+            # 4. Final metadata event
+            # -----------------------------
+            # Collect metadata from agent's last execution context
+            if hasattr(legal_ai.agent, 'last_context'):
+                ctx = legal_ai.agent.last_context
                 
                 # Get all metadata (already populated by agent)
                 token_usage = await ctx.get_memory("total_usage", {})

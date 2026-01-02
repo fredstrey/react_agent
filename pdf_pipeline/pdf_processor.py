@@ -37,7 +37,7 @@ class PDFProcessor:
     def process_pdf(
         self,
         pdf_path: str,
-        max_tokens: int = 500,
+        max_tokens: int = 1000,
     ) -> Dict:
         """
         Process a PDF and store in Qdrant

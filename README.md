@@ -1,6 +1,13 @@
-# Finance.AI - HFSM Agent Mini-Framework
+# Fred.AI - HFSM Agent Mini-Framework
 
-Finance.AI is a sophisticated financial assistant powered by a **Hierarchical Finite State Machine (HFSM)** architecture. Built for research and learning purposes with basic features: context pruning, validation, retry logic, persistence, and comprehensive observability.
+**Fred.AI** is a collection of intelligent chatbots powered by a **Hierarchical Finite State Machine (HFSM)** architecture with RAG integration. Built for research and learning purposes featuring: intent analysis, parallel tool execution, validation, retry logic, persistence, and comprehensive observability.
+
+## 🤖 Available Chatbots
+
+- **Finance.AI**: Financial assistant with stock analysis and market data
+- **Legal.AI**: Legal consultant with constitutional law expertise (NEW!)
+
+Both chatbots share the same HFSM framework with domain-specific tools and personas.
 
 ## 📺 Demo
 
@@ -74,6 +81,8 @@ stateDiagram-v2
 
 ### Key Features
 
+- ✅ **Intent Analysis**: Automatic query understanding with todo_list generation (NEW!)
+- ✅ **Parallel Tool Execution**: Multiple tools execute concurrently for better performance (NEW!)
 - ✅ **Hierarchical States**: Organized into superstates (Reasoning, Execution, Recovery, Terminal)
 - ✅ **Context Pruning**: Automatic token management to stay within LLM limits
 - ✅ **Validation Layer**: Optional "double check" for tool outputs (configurable)
@@ -182,6 +191,102 @@ async for token in agent.run_stream("What is the Selic rate?"):
 - Gradual migration path
 - Same API interface
 
+### Intent Analysis \ud83e\udde0
+
+The **IntentAnalysisState** automatically analyzes user queries before routing to extract:
+
+**1. User Intent**
+```python
+"intent": "Buscar informações sobre direitos do consumidor na Constituição Federal"
+```
+
+**2. Todo List** (Execution Plan)
+```python
+"todo_list": [
+    "Buscar artigos da CF/88 sobre direitos do consumidor",
+    "Identificar dispositivos constitucionais relevantes",
+    "Sintetizar os direitos encontrados"
+]
+```
+
+**3. Complexity Classification**
+```python
+"complexity": "complex",  # or "simple" for greetings/trivial
+"needs_tools": true       # or false for general knowledge
+```
+
+**4. Language Detection**
+```python
+"language": "pt"  # Auto-detects: pt, en, es, fr, etc.
+```
+
+**Benefits:**
+- \u2705 Better query understanding
+- \u2705 Structured execution planning
+- \u2705 Automatic language detection
+- \u2705 Smart routing (simple queries skip tool execution)
+- \u2705 Enhanced context from chat history
+
+**Robust JSON Extraction:**
+- Handles malformed LLM responses
+- Brace-counting algorithm for JSON extraction
+- Guaranteed fallback to default values
+- No crashes from "Extra data" or "Expecting value" errors
+
+### Parallel Tool Execution \u26a1
+
+The **ToolState** executes multiple tools **concurrently** using `asyncio.gather`:
+
+```python
+# LLM selects multiple tools
+tool_calls = [
+    {"name": "search_documents", "args": {"query": "Article 5"}},
+    {"name": "search_documents", "args": {"query": "Article 70"}},
+    {"name": "get_stock_price", "args": {"ticker": "AAPL"}}
+]
+
+# All execute in parallel
+results = await asyncio.gather(*[tool(**args) for tool, args in tool_calls])
+# Total time = max(tool_times), not sum(tool_times)
+```
+
+**Performance Gains:**
+- \ud83d\ude80 3x faster for multiple tool calls
+- \ud83d\udcca Better resource utilization
+- \u23f1\ufe0f Reduced latency for I/O-bound operations
+
+### Legal.AI Chatbot \u2696\ufe0f
+
+**Legal.AI** is a specialized legal consultant built on the HFSM framework:
+
+**Features:**
+- \ud83d\udcdc Constitutional law expertise (Constituição Federal de 1988)
+- \ud83d\udd0d Semantic search in legal documents (Qdrant)
+- \u2696\ufe0f Formal juridical language ("juridiquês")
+- \ud83d\udcda Source citations with article references
+- \ud83e\udde0 Intent analysis for legal queries
+
+**Persona:**
+- Uses formal legal terminology and Latin expressions
+- Structured reasoning (silogismos jurídicos)
+- Mandatory tool usage for legal questions
+- Never fabricates laws or citations
+
+**Example Query:**
+```
+User: "Quais são os mecanismos constitucionais de controle das contas do Presidente?"
+
+Legal.AI:
+1. Analyzes intent → "Buscar mecanismos de controle constitucional"
+2. Creates todo_list → ["Buscar CF/88 art. 70-75", "Analisar competências TCU", ...]
+3. Searches documents → Finds relevant constitutional articles
+4. Generates formal legal response with citations
+```
+
+**Access:**
+- API: `POST /stream_legalai`
+- Frontend: `frontend/chat_legalai.html`
+
 ---
 
 ## 🚀 Quick Start
@@ -227,13 +332,19 @@ python api/api.py
 
 The API will be available at `http://localhost:8000`
 
-### 5. Try the Frontend
+### 5. Try the Frontends
 
-Open `frontend/chat.html` in your browser for a basic chat interface with:
+**Finance.AI**: Open `frontend/chat.html` in your browser
 - Real-time streaming responses
 - Token usage display (Input/Output)
 - Source tracking
-- Confidence indicators
+- Stock price charts
+
+**Legal.AI**: Open `frontend/chat_legalai.html` in your browser
+- Constitutional law expertise
+- Legal document search
+- Formal juridical language
+- Source citations
 
 ---
 
@@ -255,8 +366,14 @@ Finance.AI/
 │   └── hfsm_agent_async.py               # Async State Machine ⚡
 │
 ├── agents/                               # Domain-Specific Agents
-│   ├── rag_agent_hfsm.py                 # Finance Agent (Sync)
-│   └── rag_agent_hfsm_async.py           # Async Finance Agent ⚡
+│   ├── finance_ai.py                     # Finance.AI Agent ⚡
+│   ├── finance_ai_utils.py               # Finance.AI Utilities
+│   ├── finance_ai_tools.py               # Finance.AI Tools
+│   ├── legal_ai.py                       # Legal.AI Agent ⚡ (NEW!)
+│   ├── legal_ai_utils.py                 # Legal.AI Utilities (NEW!)
+│   ├── legal_ai_tools.py                 # Legal.AI Tools (NEW!)
+│   ├── rag_agent_hfsm.py                 # Legacy Finance Agent (Sync)
+│   └── rag_agent_hfsm_async.py           # Legacy Async Finance Agent
 │
 ├── tools/                                # Domain Tools
 │   ├── rag_tools.py                      # Financial and RAG Tools (search, stocks)
@@ -277,7 +394,8 @@ Finance.AI/
 │   └── api_schemas.py                    # Request/Response Models
 │
 ├── frontend/                             # Web Interface
-│   └── chat.html                         # Chat UI
+│   ├── chat.html                         # Finance.AI Chat UI
+│   └── chat_legalai.html                 # Legal.AI Chat UI (NEW!)
 │
 ├── examples/                             # Learning Examples
 │   ├── README.md                         # Tutorial

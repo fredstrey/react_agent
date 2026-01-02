@@ -20,6 +20,8 @@ from core.context_async import AsyncExecutionContext, SafetyMonitor
 from core.executor_async import AsyncToolExecutor
 from finitestatemachineAgent.transition import Transition
 from finitestatemachineAgent.fork_states import ResearchForkState, ForkSummaryState, ForkContractState
+from finitestatemachineAgent.fork_contracts import ForkResult, MergedContract, UncertainTopic
+
 # Setup logging
 logger = logging.getLogger("AsyncAgentEngine")
 logger.setLevel(logging.INFO)
@@ -158,10 +160,8 @@ class RouterState(AsyncHierarchicalState):
     async def handle(self, context: AsyncExecutionContext):
         logger.info("🧠 [Router] Thinking...")
         
-        # 🔥 REMOVED: Old merged_context injection (now handled in AnswerState)
-        # Research context is now injected ONLY in AnswerState for better control
-
-        # 🔥 NEW: Check for parallel planning BEFORE calling LLM
+        # Research context is injected ONLY in AnswerState for better control
+        # - Check for parallel planning BEFORE calling LLM
         # Only if enabled, not checked yet, AND IS ROOT CONTEXT (no parents allowed to fork)
         parallel_checked = await context.get_memory("parallel_checked", False)
         is_root = context.parent is None
@@ -390,14 +390,14 @@ class ParallelPlanningState(AsyncHierarchicalState):
         self.llm = llm
         self.planner_fn = planner_fn  # Custom planner function
         self.planning_system_prompt = planning_system_prompt  # Custom/enhanced system prompt
-        self.max_branches = max_branches  # 🔥 NEW: Max branches allowed
+        self.max_branches = max_branches  # - Max branches allowed
     
 
     
     async def _default_llm_plan(self, context: AsyncExecutionContext) -> ParallelPlan:
         """Default LLM-based planning logic with customizable system prompt."""
         
-        # Default system prompt (NO placeholders)
+        # Default system prompt
         default_prompt = """You are a planning module for a tool execution system.
 
 Analyze the user's request and decide if it should be split into independent parallel research branches.
@@ -566,7 +566,7 @@ class ForkDispatchState(AsyncHierarchicalState):
             # Override user query with branch goal
             fork_ctx.user_query = f"{context.user_query}\n\nBranch goal: {branch.goal}"
             
-            # 🔥 NEW: Detailed logging for observability
+            # - Detailed logging for observability
             logger.info(f"🌿 [ForkDispatch] Creating fork '{branch.id}':")
             logger.info(f"   📋 Task: {branch.goal}")
             logger.info(f"   📝 Query: {fork_ctx.user_query[:200]}..." if len(fork_ctx.user_query) > 200 else f"   📝 Query: {fork_ctx.user_query}")
@@ -591,13 +591,50 @@ class ForkDispatchState(AsyncHierarchicalState):
                     successful_forks.append(fork_ctx)
                     logger.info(f"✅ [ForkDispatch] Branch {branch_id} completed")
             
-            # 🔥 NEW: Accumulate token usage from all forks back to parent
+            # - Accumulate token usage AND sources from all forks back to parent
             total_fork_tokens = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            all_fork_sources = []
+            all_merged_tools = []
+            
             for fork_ctx in successful_forks:
+                # Tokens
                 fork_usage = await fork_ctx.get_total_usage()
                 total_fork_tokens["prompt_tokens"] += fork_usage.get("prompt_tokens", 0)
                 total_fork_tokens["completion_tokens"] += fork_usage.get("completion_tokens", 0)
                 total_fork_tokens["total_tokens"] += fork_usage.get("total_tokens", 0)
+                
+                # Sources
+                fork_sources = await fork_ctx.get_memory("sources_used", [])
+                if fork_sources:
+                    for source in fork_sources:
+                        if source not in all_fork_sources:
+                            all_fork_sources.append(source)
+
+                # Tool Calls (for merged_tool_calls)
+                if fork_ctx.tool_calls:
+                    all_merged_tools.extend(fork_ctx.tool_calls)
+            
+            # Save merged tool calls for LegalAI source extraction
+            await context.set_memory("merged_tool_calls", all_merged_tools)
+            
+            # Update parent context with accumulated tokens
+            current_tokens = await context.get_memory("total_usage", {})
+            new_tokens = {
+                "prompt_tokens": current_tokens.get("prompt_tokens", 0) + total_fork_tokens["prompt_tokens"],
+                "completion_tokens": current_tokens.get("completion_tokens", 0) + total_fork_tokens["completion_tokens"],
+                "total_tokens": current_tokens.get("total_tokens", 0) + total_fork_tokens["total_tokens"]
+            }
+            await context.set_memory("total_usage", new_tokens)
+            
+            # Update parent context with aggregated sources
+            current_sources = await context.get_memory("sources_used", [])
+            for source in all_fork_sources:
+                if source not in current_sources:
+                    current_sources.append(source)
+            await context.set_memory("sources_used", current_sources)
+            
+            logger.info(f"📊 [ForkDispatch] Aggregated tokens: {total_fork_tokens['total_tokens']}")
+            logger.info(f"📚 [ForkDispatch] Aggregated sources: {len(all_fork_sources)}")
             
             if total_fork_tokens["total_tokens"] > 0:
                 await context.accumulate_usage(total_fork_tokens)
@@ -620,7 +657,7 @@ class ForkDispatchState(AsyncHierarchicalState):
         """Execute a single fork through the engine."""
         logger.info(f"🌿 [Fork:{branch_id}] Starting execution")
         
-        # 🔥 NEW: Start from ResearchForkState (not RouterState)
+        # - Start from ResearchForkState (not RouterState)
         # This bypasses the full Router logic for efficiency
         # Pass explicitly to dispatch
         await self.engine.dispatch(fork_ctx, initial_state_name="ResearchForkState")
@@ -666,7 +703,7 @@ class MergeState(AsyncHierarchicalState):
                 logger.error(f"❌ [Merge] Custom merge failed: {e}, using default")
                 merged = self._contract_merge(fork_results)
         else:
-            # 🔥 NEW: Use deterministic contract merge by default
+            # - Use deterministic contract merge by default
             merged = self._contract_merge(fork_results)
             logger.info("✅ [Merge] Contract merge completed")
         
@@ -692,7 +729,6 @@ class MergeState(AsyncHierarchicalState):
         
         Detects consensus and conflicts in claims from multiple forks.
         """
-        from finitestatemachineAgent.fork_contracts import ForkResult, MergedContract, UncertainTopic
         
         all_claims = {}
         all_coverage = set()
@@ -769,11 +805,30 @@ class MergeState(AsyncHierarchicalState):
                 }
                 logger.debug(f"✅ [Merge] Consensus on '{key}': {resolved[key]['value']} ({len(variants)} variants)")
             else:
-                # Conflict: forks disagree
-                conflicts[key] = []
-                for value_str, variants in unique_values.items():
-                    conflicts[key].extend(variants)
-                logger.warning(f"⚠️ [Merge] Conflict on '{key}': {len(conflicts[key])} different values")
+                # Conflict - multiple different values
+                
+                # 🔥 SPECIAL CASE: Concatenate 'summary' claims instead of conflicting
+                if key == "summary":
+                    concatenated_summary = " | ".join([str(val) for val in unique_values.keys()])
+                    # Create a synthetic merged claim
+                    resolved[key] = {
+                        "value": concatenated_summary,
+                        "variants": [
+                           {"evidence": c["evidence"], "confidence": c["confidence"], "source": c["branch_id"]}
+                           for sublist in unique_values.values() for c in sublist
+                        ],
+                        # Average confidence
+                        "confidence": sum(c["confidence"] for sublist in unique_values.values() for c in sublist) / sum(len(sublist) for sublist in unique_values.values()),
+                        "is_concatenated": True
+                    }
+                    logger.info(f"✅ [Merge] Concatenated conflicting summaries ({len(unique_values)} variants)")
+                
+                else:
+                    # Logic for normal keys
+                    conflicts[key] = []
+                    for value_str, variants in unique_values.items():
+                        conflicts[key].extend(variants)
+                    logger.warning(f"⚠️ [Merge] Conflict on '{key}': {len(conflicts[key])} different values")
         
         # 🔥 EPISTEMIC: Uncertainty reduces coverage, never invalidates claims
         uncertain_coverage = set(u["topic"] for u in all_uncertain)
@@ -1170,6 +1225,7 @@ class IntentAnalysisState(AsyncHierarchicalState):
     Analyzes:
     - Intent
     - Context from history
+    - Todo list for execution
     - Complexity & Tool needs (for redirect)
     - Language
     """
@@ -1189,42 +1245,152 @@ class IntentAnalysisState(AsyncHierarchicalState):
             chat_history = await context.get_memory("chat_history", [])
             current_query = context.user_query
             
-            # Build prompt
+            # Build prompt - Comprehensive analysis
             messages = [{
                 "role": "system",
-                "content": f"{self.system_instruction}\n\n"
-                           f"TAREFA: Analise a intenção e complexidade.\n"
-                           f"JSON OBRIGATÓRIO:\n"
-                           f"{{\n"
-                           f'    "intent": "resumo",\n'
-                           f'    "context_from_history": [],\n'
-                           f'    "enhanced_query": "query",\n'
-                           f'    "language": "pt",\n'
-                           f'    "complexity": "simple|complex",\n'
-                           f'    "needs_tools": true|false\n'
-                           f"}}\n"
-                           f"DEFINIÇÕES:\n"
-                           f'- "complexity": "simple" se for saudação ou trivial. "complex" se requer raciocínio.\n'
-                           f'- "needs_tools": true se requer dados externos. false se for trivial.'
+                "content": """Você é um assistente de análise de intenção. Sua tarefa é analisar a pergunta do usuário e retornar um JSON estruturado.
+
+TAREFA: Analise a pergunta e retorne APENAS um JSON válido com a seguinte estrutura:
+
+{
+    "intent": "Descrição clara e concisa da intenção do usuário",
+    "context_from_history": ["Fato relevante 1 do histórico", "Fato relevante 2"],
+    "enhanced_query": "Pergunta enriquecida com contexto (se necessário)",
+    "todo_list": [
+        "Passo 1: O que fazer primeiro",
+        "Passo 2: O que analisar",
+        "Passo 3: Como responder"
+    ],
+    "language": "pt",
+    "complexity": "simple",
+    "needs_tools": false
+}
+
+CAMPOS OBRIGATÓRIOS:
+
+1. **intent**: Resumo da intenção principal (ex: "Buscar informações sobre X", "Comparar Y e Z")
+
+2. **context_from_history**: Lista de fatos relevantes do histórico de conversa. Deixe vazio [] se não houver histórico relevante.
+
+3. **enhanced_query**: A pergunta original enriquecida com contexto do histórico. Se não houver contexto relevante, repita a pergunta original.
+
+4. **todo_list**: Lista de 2-4 passos técnicos para resolver a tarefa:
+   - Para perguntas simples: ["Entender a pergunta", "Responder diretamente"]
+   - Para perguntas complexas: ["Buscar informação X", "Analisar Y", "Sintetizar resposta"]
+
+5. **language**: Código ISO do idioma (pt, en, es, fr, etc.)
+
+6. **complexity**: 
+   - "simple" = saudação, pergunta trivial, conversa casual
+   - "complex" = requer pesquisa, raciocínio, análise
+
+7. **needs_tools**: 
+   - true = precisa buscar dados externos (documentos, APIs, cálculos)
+   - false = pode responder com conhecimento geral
+
+EXEMPLOS:
+
+Pergunta: "Olá, tudo bem?"
+{
+    "intent": "Saudação casual",
+    "context_from_history": [],
+    "enhanced_query": "Olá, tudo bem?",
+    "todo_list": ["Responder à saudação de forma amigável"],
+    "language": "pt",
+    "complexity": "simple",
+    "needs_tools": false
+}
+
+Pergunta: "Quais são os direitos do consumidor na CF/88?"
+{
+    "intent": "Buscar informações sobre direitos do consumidor na Constituição Federal",
+    "context_from_history": [],
+    "enhanced_query": "Quais são os direitos do consumidor na CF/88?",
+    "todo_list": [
+        "Buscar artigos da CF/88 sobre direitos do consumidor",
+        "Identificar dispositivos constitucionais relevantes",
+        "Sintetizar os direitos encontrados"
+    ],
+    "language": "pt",
+    "complexity": "complex",
+    "needs_tools": true
+}
+
+IMPORTANTE:
+- Retorne APENAS o JSON, sem texto adicional antes ou depois
+- Não adicione comentários ou explicações
+- Certifique-se de que o JSON está válido e completo"""
             }]
             
             if chat_history:
                 messages.extend(chat_history[-5:])
                 
-            messages.append({"role": "user", "content": f"Query: {current_query}"})
+            messages.append({"role": "user", "content": f"Pergunta atual: {current_query}\n\nRetorne APENAS o JSON da análise."})
             
             # Call LLM
             response = await self.llm.chat(messages)
+            
+            # Track usage
+            if "usage" in response:
+                await context.accumulate_usage(response["usage"])
+            
             content = response.get("content", "").strip()
             
-            # Clean Markdown
-            if "```" in content:
-                content = content.replace("```json", "").replace("```", "")
+            # Robust JSON extraction
+            analysis = None
+            try:
+                if not content:
+                    raise ValueError("Empty response")
+                
+                # Clean markdown
+                if content.startswith("```json"):
+                    content = content.replace("```json", "", 1)
+                if content.startswith("```"):
+                    content = content.replace("```", "", 1)
+                if content.endswith("```"):
+                    content = content.rsplit("```", 1)[0]
+                
+                content = content.strip()
+                
+                # Extract JSON object using brace counting
+                start_idx = content.find("{")
+                if start_idx == -1:
+                    raise ValueError("No JSON found")
+                
+                brace_count = 0
+                end_idx = start_idx
+                for i in range(start_idx, len(content)):
+                    if content[i] == "{":
+                        brace_count += 1
+                    elif content[i] == "}":
+                        brace_count -= 1
+                        if brace_count == 0:
+                            end_idx = i + 1
+                            break
+                
+                json_str = content[start_idx:end_idx]
+                analysis = json.loads(json_str)
+                logger.info("✅ [IntentAnalysis] JSON parsed successfully")
+            except Exception as e:
+                logger.warning(f"⚠️ [IntentAnalysis] JSON parsing failed: {e}")
+                analysis = None
             
-            analysis = json.loads(content.strip())
+            # Fallback
+            if analysis is None:
+                logger.info("🔄 [IntentAnalysis] Using fallback")
+                analysis = {
+                    "intent": "unknown",
+                    "context_from_history": [],
+                    "enhanced_query": current_query,
+                    "todo_list": [],
+                    "language": "pt",
+                    "complexity": "simple",
+                    "needs_tools": False
+                }
             
             # Store in context
             await context.set_memory("intent_analysis", analysis)
+            await context.set_memory("todo_list", analysis.get("todo_list", []))
             await context.set_memory("intent_analyzed", True)
             await context.set_memory("user_language", analysis.get("language", "pt"))
             
@@ -1232,6 +1398,12 @@ class IntentAnalysisState(AsyncHierarchicalState):
             if analysis.get("enhanced_query"):
                 context.user_query = analysis.get("enhanced_query")
                 logger.info(f"✨ [IntentAnalysis] Query enhanced: {context.user_query}")
+            
+            # Log results
+            logger.info(f"✅ [IntentAnalysis] Intent: {analysis.get('intent', 'unknown')}")
+            logger.info(f"📝 [IntentAnalysis] Todo list ({len(analysis.get('todo_list', []))} items):")
+            for i, task in enumerate(analysis.get('todo_list', []), 1):
+                logger.info(f"   {i}. {task}")
                 
             # Redirect Check
             complexity = analysis.get("complexity", "complex")
@@ -1268,19 +1440,19 @@ class AsyncAgentEngine:
         skip_validation: bool = True,  # Default: No validation
         validation_fn=None,  # Custom validation function
         
-        # 🔥 NEW: Parallel execution support
+        # - Parallel execution support
         enable_parallel_planning: bool = False,
         parallel_plan_fn=None,           # Custom planning function
         planning_system_prompt=None,     # Custom/enhanced system prompt for LLM planner
         merge_fn=None,                   # Custom merge strategy
-        max_parallel_branches: int = 3,  # 🔥 NEW: Max branches per fork (width limit)
+        max_parallel_branches: int = 3,  # - Max branches per fork (width limit)
         # 🔥 Safety Config
         max_global_requests: int = 50,
-        post_router_hook=None,  # 🔥 NEW: Optional hook to intercept router transitions
-        initial_state: Optional[str] = None,  # 🔥 NEW: Custom initial state
+        post_router_hook=None,  # - Optional hook to intercept router transitions
+        initial_state: Optional[str] = None,  # - Custom initial state
         # 🔥 Intent Analysis Config
-        enable_intent_analysis: bool = False,  # 🔥 NEW: Enable built-in intent analysis
-        intent_analysis_llm: Optional['AsyncLLMClient'] = None,  # 🔥 NEW: LLM for intent analysis
+        enable_intent_analysis: bool = False,  # - Enable built-in intent analysis
+        intent_analysis_llm: Optional['AsyncLLMClient'] = None,  # - LLM for intent analysis
         # 🔥 Redirect Feature
         redirect_system_prompt: str = "Você é um assistente útil. Responda a pergunta do usuário de forma direta.",
         
@@ -1400,7 +1572,7 @@ class AsyncAgentEngine:
                 self.llm, 
                 self.parallel_plan_fn,
                 self.planning_system_prompt,
-                max_branches=self.max_parallel_branches  # 🔥 Fix: Pass width limit
+                max_branches=self.max_parallel_branches  # Pass width limit
             )
             self.states["ParallelPlanningState"] = self.parallel_planning_state
             
@@ -1410,7 +1582,7 @@ class AsyncAgentEngine:
             self.merge_state = MergeState(self.execution, self.merge_fn)
             self.states["MergeState"] = self.merge_state
             
-            # 🔥 NEW: Fork-specific states
+            # - Fork-specific states
             self.research_fork_state = ResearchForkState(
                 self.reasoning,
                 self.llm,
@@ -1419,8 +1591,7 @@ class AsyncAgentEngine:
             )
             self.states["ResearchForkState"] = self.research_fork_state
             
-            # 🔥 UPDATED: Use ForkContractState with Strategy
-            from finitestatemachineAgent.fork_states import ForkContractState
+            # Use ForkContractState with Strategy
             self.fork_contract_state = ForkContractState(
                 self.terminal, 
                 self.llm,
@@ -1430,7 +1601,7 @@ class AsyncAgentEngine:
             # Backward compatibility alias
             self.states["ForkSummaryState"] = self.fork_contract_state
             
-            # 🔥 NEW: Add semantic synthesis state with Strategy
+            # - Add semantic synthesis state with Strategy
             from finitestatemachineAgent.llm_synthesis_strategy import LLMSynthesisStrategy
             synthesis_strat = self.synthesis_strategy or LLMSynthesisStrategy(self.llm, temperature=0.3)
             
@@ -1457,8 +1628,7 @@ class AsyncAgentEngine:
         if self.enable_intent_analysis:
             self.intent_analysis_state = IntentAnalysisState(
                 self.policy, 
-                self.intent_analysis_llm or self.llm,
-                self.system_instruction
+                self.intent_analysis_llm or self.llm,"" 
             )
             self.states["IntentAnalysisState"] = self.intent_analysis_state
             
@@ -1572,10 +1742,11 @@ class AsyncAgentEngine:
         logger.info(f"📝 [IntentAnalysis] Query: {context.user_query[:100]}...")
         logger.info("=" * 80)
         
+        logger.info("🔥🔥🔥 [DEBUG] IntentAnalysisState.handle() v3.0 LOADED")
+        
         try:
-            # Get chat history and system instruction
+            # Get chat history
             chat_history = await context.get_memory("chat_history", [])
-            system_instruction = await context.get_memory("system_instruction", "")
             current_query = context.user_query
             
             logger.info(f"[IntentAnalysis] Chat history length: {len(chat_history)}")
@@ -1583,20 +1754,12 @@ class AsyncAgentEngine:
             # Build analysis prompt
             messages = [{
                 "role": "system",
-                "content": f"""{system_instruction}
+                "content": """Você é um assistente de análise de intenção.
 
-TAREFA: Análise de Intenção e Planejamento
-
-Analise o histórico RECENTE e a pergunta atual para criar um plano de execução.
-Seja direto e objetivo. Ignore conversas passadas que não sejam relevantes para a tarefa ATUAL.
-
-OBJETIVOS:
-1. Identificar a intenção principal do usuário
-2. Extrair APENAS o contexto necessário do histórico para resolver a tarefa ATUAL
-3. Criar uma Lista de Tarefas (Todo List) técnica e sequencial para guiar a execução
+TAREFA: Analise a pergunta do usuário e retorne APENAS um JSON válido.
 
 Formato JSON OBRIGATÓRIO:
-{{
+{
     "intent": "Resumo conciso do objetivo do usuário",
     "required_context": ["Fato relevante 1 extraído do histórico", "Fato relevante 2"],
     "enhanced_query": "Pergunta do usuário enriquecida com o contexto extraído (se necessário)",
@@ -1605,19 +1768,17 @@ Formato JSON OBRIGATÓRIO:
         "Ação 2: O que analisar",
         "Ação 3: Como responder"
     ],
-    "language": "Código ISO da língua (pt, en, es...)",
-    "complexity": "simple | complex",
-    "needs_tools": true | false
-}}
+    "language": "pt",
+    "complexity": "simple",
+    "needs_tools": false
+}
 
-DEFINIÇÕES:
-- "complexity": "simple" se for uma saudação, pergunta pessoal sobre o bot ou algo trivial que NÃO requer raciocínio profundo ou pesquisa. "complex" caso contrário.
-- "needs_tools": true se a resposta depender de informações externas (pesquisa, banco de dados, cálculos). false se puder ser respondido com conhecimento geral ou conversa fiada.
-
-IMPORTANTE:
-- "required_context" deve estar vazio se o histórico não for relevante para a pergunta ATUAL.
-- "enhanced_query" deve ser a própria pergunta se não houver ambiguidade.
-- Mantenha o foco TOTAL na resolução da solicitação ATUAL."""
+REGRAS:
+- complexity: "simple" para saudações/trivial, "complex" para pesquisa
+- needs_tools: true se precisa buscar dados externos
+- required_context: vazio se histórico não for relevante
+- enhanced_query: igual à pergunta se não houver ambiguidade
+- Retorne APENAS o JSON, sem texto antes ou depois"""
             }]
             
             # Add chat history
@@ -1642,16 +1803,69 @@ IMPORTANTE:
             # Extract JSON from response (handle markdown code blocks)
             content = response.get("content", "").strip()
             
-            logger.info(f"[IntentAnalysis] Raw LLM response (first 200 chars): {content[:200]}...")
+            logger.info("🔥 [DEBUG] Using ROBUST JSON extraction v2.0")
+            logger.info(f"[IntentAnalysis] Raw LLM response length: {len(content)} chars")
             
-            # Remove markdown code blocks if present
-            if content.startswith("```"):
-                lines = content.split("\n")
-                content = "\n".join(lines[1:-1])  # Remove first and last line
-                logger.info(f"[IntentAnalysis] Removed markdown wrapper")
+            # Robust JSON extraction with guaranteed fallback
+            analysis = None
+            try:
+                import json
+                
+                if not content:
+                    logger.warning("⚠️ [IntentAnalysis] Empty LLM response")
+                    raise ValueError("Empty response content")
+
+                # Remove markdown code blocks
+                if content.startswith("```json"):
+                    content = content.replace("```json", "", 1)
+                if content.startswith("```"):
+                    content = content.replace("```", "", 1)
+                if content.endswith("```"):
+                    content = content.rsplit("```", 1)[0]
+                
+                content = content.strip()
+                
+                # 🔥 ROBUST: Extract only the JSON object, ignore extra text
+                # Find the first { and match its closing }
+                start_idx = content.find("{")
+                if start_idx == -1:
+                    raise ValueError("No JSON object found in response")
+                
+                # Count braces to find the matching closing brace
+                brace_count = 0
+                end_idx = start_idx
+                for i in range(start_idx, len(content)):
+                    if content[i] == "{":
+                        brace_count += 1
+                    elif content[i] == "}":
+                        brace_count -= 1
+                        if brace_count == 0:
+                            end_idx = i + 1
+                            break
+                
+                # Extract only the JSON part
+                json_str = content[start_idx:end_idx]
+                
+                analysis = json.loads(json_str)
+                logger.info(f"✅ [IntentAnalysis] JSON parsed successfully")
+            except Exception as e:
+                # Catch ALL parsing errors - DO NOT RE-RAISE
+                logger.warning(f"⚠️ [IntentAnalysis] JSON parsing failed: {e}")
+                logger.warning(f"⚠️ [IntentAnalysis] Content preview: {content[:200] if content else 'EMPTY'}...")
+                analysis = None  # Will trigger fallback below
             
-            import json
-            analysis = json.loads(content)
+            # Ensure analysis is set (fallback if parsing failed)
+            if analysis is None:
+                logger.info("🔄 [IntentAnalysis] Using fallback default analysis")
+                analysis = {
+                    "intent": "unknown",
+                    "required_context": [],
+                    "enhanced_query": current_query,
+                    "todo_list": [],
+                    "language": "pt",
+                    "complexity": "simple",
+                    "needs_tools": False
+                }
             
             # Store analysis in context
             await context.set_memory("intent_analysis", analysis)
@@ -1715,12 +1929,20 @@ IMPORTANTE:
             logger.info(f"🎯 [Engine] Starting from custom global initial state: {self.initial_state_name}")
             # Check if already analyzed to prevent loops
             intent_analyzed = await context.get_memory("intent_analyzed")
+            if not intent_analyzed and self.enable_intent_analysis:
+                current_state = self.states["IntentAnalysisState"]
+                logger.info("🎯 [Engine] Starting with Intent Analysis (Initial State Override)")
+            # else: current_state remains custom initial state
+
+        # 🔥 2. Default flow: Check Intent Analysis before Router
+        elif not is_fork and self.enable_intent_analysis:
+            intent_analyzed = await context.get_memory("intent_analyzed")
             if not intent_analyzed:
                 current_state = self.states["IntentAnalysisState"]
-                logger.info("🎯 [Engine] Starting with Intent Analysis")
+                logger.info("🎯 [Engine] Starting default flow with Intent Analysis")
             else:
                 current_state = self.router_state
-                
+
         else:
             current_state = self.router_state
 
@@ -1775,14 +1997,12 @@ IMPORTANTE:
         """
         Run agent (async).
         """
-        """
-        Run agent (async).
-        """
         # Create context with safety monitor
         monitor = SafetyMonitor(max_requests=self.max_global_requests)
         context = AsyncExecutionContext(user_query=query, safety_monitor=monitor)
         
         await context.set_memory("system_instruction", self.system_instruction)
+        await context.set_memory("redirect_system_prompt", self.redirect_system_prompt)  # Store redirect prompt
         await context.set_memory("chat_history", chat_history or [])
 
         await self.dispatch(context)

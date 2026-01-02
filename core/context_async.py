@@ -196,6 +196,6 @@ class AsyncExecutionContext(BaseModel):
             "timestamp": self.timestamp.isoformat(),
             "start_time": self.start_time.isoformat(),
             "metrics": self.metrics,
-            # 🔥 NEW: Include request count in snapshot
+            # - Include request count in snapshot
             "request_count": self.safety_monitor.count if hasattr(self, 'safety_monitor') else 0
         }
