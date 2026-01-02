@@ -190,8 +190,7 @@ async for token in agent.run_stream("What is the Selic rate?"):
 
 ```bash
 # Clone repository
-git clone https://github.com/fredstrey/react_agent.git
-cd Finance.AI
+git clone https://github.com/fredstrey/HFSM-Agent.git
 
 # Create virtual environment
 python -m venv venv
